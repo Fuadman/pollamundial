@@ -1,0 +1,13 @@
+export { UserService } from './user.service';
+export { TeamService } from './team.service';
+export { MatchService } from './match.service';
+export { MatchResultService } from './match-result.service';
+export { PredictionService } from './prediction.service';
+export { UserScoreService } from './user-score.service';
+export { NewsArticleService } from './news-article.service';
+export { SimulationDataService } from './simulation-data.service';
+export { SeedingService } from './seeding.service';
+export { ScoringService } from './scoring.service';
+export { LockdownService } from './lockdown.service';
+export { TimezoneService } from './timezone.service';
+export { BracketService } from './bracket.service';
