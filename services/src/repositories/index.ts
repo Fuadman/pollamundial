@@ -5,4 +5,3 @@ export { MatchResultRepository } from './match-result.repository';
 export { PredictionRepository } from './prediction.repository';
 export { UserScoreRepository } from './user-score.repository';
 export { NewsArticleRepository } from './news-article.repository';
-export { SimulationDataRepository } from './simulation-data.repository';

@@ -8,7 +8,8 @@ import { formatShortDate, formatTime } from '../utils/timezone';
 import type { Prediction } from '../types';
 
 function statusBadge(p: Prediction) {
-  if (p.pointsEarned !== null) return <Badge variant="green">✅ {p.pointsEarned} pts</Badge>;
+  if (p.match?.status === 'completed' && p.pointsEarned !== null)
+    return <Badge variant="green">✅ {p.pointsEarned} pts</Badge>;
   if (p.lockedTimestamp) return <Badge variant="yellow">🔒 Bloqueada</Badge>;
   return <Badge variant="blue">⏳ Pendiente</Badge>;
 }

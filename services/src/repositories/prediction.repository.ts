@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, Repository, Between } from 'typeorm';
 import { Prediction } from '../entities/prediction.entity';
+import { User } from '../entities/user.entity';
+import { Match } from '../entities/match.entity';
+import { Team } from '../entities/team.entity';
 
 @Injectable()
 export class PredictionRepository extends Repository<Prediction> {
@@ -12,18 +15,24 @@ export class PredictionRepository extends Repository<Prediction> {
     userId: string,
     matchId: string,
   ): Promise<Prediction | null> {
-    return this.findOne({
-      where: { userId, matchId },
-      relations: ['user', 'match'],
-    });
+    return this.createQueryBuilder('prediction')
+      .leftJoinAndMapOne('prediction.user', User, 'user', 'user.id = prediction.userId')
+      .leftJoinAndMapOne('prediction.match', Match, 'match', 'match.id = prediction.matchId')
+      .leftJoinAndMapOne('prediction.match.team1', Team, 'team1', 'team1.id = match.team1Id')
+      .leftJoinAndMapOne('prediction.match.team2', Team, 'team2', 'team2.id = match.team2Id')
+      .where('prediction.userId = :userId', { userId })
+      .andWhere('prediction.matchId = :matchId', { matchId })
+      .getOne();
   }
 
   async findByUserId(userId: string): Promise<Prediction[]> {
-    return this.find({
-      where: { userId },
-      relations: ['match', 'match.team1', 'match.team2'],
-      order: { submissionTimestamp: 'DESC' },
-    });
+    return this.createQueryBuilder('prediction')
+      .leftJoinAndMapOne('prediction.match', Match, 'match', 'match.id = prediction.matchId')
+      .leftJoinAndMapOne('prediction.match.team1', Team, 'team1', 'team1.id = match.team1Id')
+      .leftJoinAndMapOne('prediction.match.team2', Team, 'team2', 'team2.id = match.team2Id')
+      .where('prediction.userId = :userId', { userId })
+      .orderBy('prediction.submissionTimestamp', 'DESC')
+      .getMany();
   }
 
   async findByMatchId(matchId: string): Promise<Prediction[]> {
@@ -118,6 +127,14 @@ export class PredictionRepository extends Repository<Prediction> {
       .set({ lockedTimestamp: new Date() })
       .where('matchId = :matchId', { matchId })
       .andWhere('lockedTimestamp IS NULL')
+      .execute();
+  }
+
+  async unlockPredictionsByMatch(matchId: string): Promise<void> {
+    await this.createQueryBuilder()
+      .update(Prediction)
+      .set({ lockedTimestamp: null })
+      .where('matchId = :matchId', { matchId })
       .execute();
   }
 

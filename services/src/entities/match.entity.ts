@@ -71,6 +71,9 @@ export class Match {
   @Column('varchar', { length: 50, nullable: true })
   eliminationRound!: string | null;
 
+  @Column('boolean', { default: false })
+  predictionsBlocked!: boolean;
+
   @CreateDateColumn()
   createdAt!: Date;
 

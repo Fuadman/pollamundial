@@ -1,7 +1,7 @@
 import { clsx } from 'clsx';
 import type { Match } from '../../types';
 import { Badge } from '../ui/Badge';
-import { formatShortDate, formatTime, isLocked } from '../../utils/timezone';
+import { formatShortDate, formatTime } from '../../utils/timezone';
 
 const statusLabel: Record<string, { label: string; variant: 'green' | 'blue' | 'yellow' | 'gray' }> = {
   scheduled: { label: 'Próximo', variant: 'blue' },
@@ -13,12 +13,21 @@ const statusLabel: Record<string, { label: string; variant: 'green' | 'blue' | '
 interface MatchCardProps {
   match: Match;
   onClick?: () => void;
-  userPrediction?: { team1Score: number; team2Score: number } | null;
+  userPrediction?: {
+    team1Score: number;
+    team2Score: number;
+    pointsEarned: number | null;
+  } | null;
 }
 
 export function MatchCard({ match, onClick, userPrediction }: MatchCardProps) {
-  const { label, variant } = statusLabel[match.status] ?? { label: match.status, variant: 'gray' };
-  const locked = isLocked(match.lockdownTime);
+  const baseStatus = statusLabel[match.status] ?? { label: match.status, variant: 'gray' };
+  const displayStatus =
+    match.status === 'completed' && !match.result
+      ? { label: 'Resultado pendiente', variant: 'yellow' as const }
+      : match.predictionsBlocked
+        ? { label: 'Predicciones bloqueadas', variant: 'yellow' as const }
+      : baseStatus;
 
   return (
     <div
@@ -41,7 +50,14 @@ export function MatchCard({ match, onClick, userPrediction }: MatchCardProps) {
           <span>{formatShortDate(match.scheduledTime)}</span>
           <span>{formatTime(match.scheduledTime)}</span>
         </div>
-        <Badge variant={variant}>{label}</Badge>
+        <div className="flex flex-col items-end gap-1">
+          {match.status === 'completed' && match.result && (
+            <span className="text-xs font-semibold text-gray-700">
+              {match.result.team1Score} – {match.result.team2Score}
+            </span>
+          )}
+          <Badge variant={displayStatus.variant}>{displayStatus.label}</Badge>
+        </div>
       </div>
 
       {/* Teams and score */}
@@ -69,22 +85,49 @@ export function MatchCard({ match, onClick, userPrediction }: MatchCardProps) {
         </div>
       </div>
 
+      <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+        <span>Resultado del partido:</span>
+        <span className="font-medium text-gray-700">
+          {match.result
+            ? `${match.result.team1Score} – ${match.result.team2Score}`
+            : match.status === 'completed'
+              ? 'Resultado no publicado'
+              : 'Pendiente'}
+        </span>
+      </div>
+
+      {match.predictionsBlocked && !match.result && (
+        <p className="mt-2 text-xs text-amber-700 text-center font-medium">
+          Predicciones bloqueadas por el administrador
+        </p>
+      )}
+
       {/* User prediction indicator */}
       {userPrediction && (
-        <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-          <span>Tu predicción:</span>
-          <span className="font-medium text-gray-700">
-            {userPrediction.team1Score} – {userPrediction.team2Score}
-          </span>
+        <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-500 space-y-1">
+          <div className="flex items-center justify-between">
+            <span>Tu predicción:</span>
+            <span className="font-medium text-gray-700">
+              {userPrediction.team1Score} – {userPrediction.team2Score}
+            </span>
+          </div>
+          {match.status === 'completed' && (
+            <div className="flex items-center justify-between">
+              <span>Tu score:</span>
+              <span className="font-semibold text-green-700">
+                {userPrediction.pointsEarned ?? 0} pts
+              </span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Lockdown indicator for active predictions */}
-      {!userPrediction && match.status === 'scheduled' && locked && (
-        <p className="mt-2 text-xs text-red-500 text-center">🔒 Predicciones cerradas</p>
-      )}
-      {!userPrediction && match.status === 'scheduled' && !locked && (
-        <p className="mt-2 text-xs text-blue-500 text-center">+ Agregar predicción</p>
+      {!userPrediction && !match.result && !match.predictionsBlocked && (
+        <div className="mt-3 flex justify-center">
+          <span className="inline-flex items-center rounded-full bg-blue-50 text-blue-700 px-3 py-1 text-xs font-semibold border border-blue-200">
+            + Añadir predicción
+          </span>
+        </div>
       )}
     </div>
   );

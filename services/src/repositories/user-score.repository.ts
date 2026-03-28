@@ -119,4 +119,29 @@ export class UserScoreRepository extends Repository<UserScore> {
 
     return result?.min || 0;
   }
+
+  async findLeaderboardPage(
+    phase: 'all' | 'group' | 'elimination',
+    page: number,
+    limit: number,
+  ): Promise<{ rows: UserScore[]; total: number }> {
+    const orderColumn =
+      phase === 'group'
+        ? 'score.groupStagePoints'
+        : phase === 'elimination'
+          ? 'score.eliminationPoints'
+          : 'score.totalPoints';
+
+    const skip = (page - 1) * limit;
+
+    const [rows, total] = await this.createQueryBuilder('score')
+      .leftJoinAndSelect('score.user', 'user')
+      .orderBy(orderColumn, 'DESC')
+      .addOrderBy('score.updatedAt', 'ASC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return { rows, total };
+  }
 }

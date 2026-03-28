@@ -4,14 +4,14 @@ import { useAppDispatch, useAppSelector } from '../app/hooks';
 import { fetchMatch } from '../features/matches/matchesSlice';
 import {
   fetchPredictionForMatch,
+  fetchUserPredictions,
   submitPrediction,
   updatePrediction,
 } from '../features/predictions/predictionsSlice';
 import { addNotification } from '../features/ui/uiSlice';
 import { Button } from '../components/ui/Button';
-import { CountdownTimer } from '../components/shared/CountdownTimer';
 import { Badge } from '../components/ui/Badge';
-import { isLocked, formatMatchTime } from '../utils/timezone';
+import { formatMatchTime } from '../utils/timezone';
 import type { SubmitPredictionDto } from '../types';
 
 export function MatchDetailPage() {
@@ -26,7 +26,6 @@ export function MatchDetailPage() {
 
   const [team1Score, setTeam1Score] = useState(0);
   const [team2Score, setTeam2Score] = useState(0);
-  const [locked, setLocked] = useState(false);
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
@@ -35,12 +34,6 @@ export function MatchDetailPage() {
       dispatch(fetchPredictionForMatch(matchId));
     }
   }, [matchId, dispatch]);
-
-  useEffect(() => {
-    if (match) {
-      setLocked(isLocked(match.lockdownTime));
-    }
-  }, [match]);
 
   useEffect(() => {
     if (prediction) {
@@ -57,7 +50,7 @@ export function MatchDetailPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!match || !user || locked) return;
+    if (!match || !user || match.result || match.predictionsBlocked) return;
 
     const data: SubmitPredictionDto = {
       matchId: match.id,
@@ -76,6 +69,7 @@ export function MatchDetailPage() {
 
     if (submitPrediction.fulfilled.match(result) || updatePrediction.fulfilled.match(result)) {
       dispatch(addNotification({ type: 'success', message: '✅ Predicción guardada' }));
+      dispatch(fetchUserPredictions(user.id));
       setEditing(false);
     } else {
       dispatch(addNotification({ type: 'error', message: 'Error al guardar la predicción' }));
@@ -133,15 +127,12 @@ export function MatchDetailPage() {
         <p className="text-center text-sm text-gray-500">{formatMatchTime(match.scheduledTime)}</p>
 
         {/* Lockdown */}
-        {match.status === 'scheduled' && (
+        {!match.result && (
           <div className="text-center">
-            {locked ? (
-              <Badge variant="red">🔒 Predicciones cerradas</Badge>
+            {match.predictionsBlocked ? (
+              <Badge variant="yellow">Predicciones bloqueadas por admin</Badge>
             ) : (
-              <CountdownTimer
-                lockdownTime={match.lockdownTime}
-                onLockdown={() => setLocked(true)}
-              />
+              <Badge variant="blue">Predicciones abiertas hasta bloqueo del admin</Badge>
             )}
           </div>
         )}
@@ -152,7 +143,7 @@ export function MatchDetailPage() {
         <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800 text-center">
           Tu cuenta debe estar registrada para predecir este partido
         </div>
-      ) : match.status === 'completed' && !hasPrediction ? (
+      ) : match.result && match.status === 'completed' && !hasPrediction ? (
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 text-center">
           Partido finalizado — no tenías predicción para este partido
         </div>
@@ -161,7 +152,7 @@ export function MatchDetailPage() {
         <div className="rounded-2xl bg-white border border-gray-200 shadow-sm p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-gray-900">Tu predicción</h2>
-            {!locked && match.status === 'scheduled' && (
+            {!match.result && !match.predictionsBlocked && (
               <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
                 ✏️ Editar
               </Button>
@@ -178,7 +169,7 @@ export function MatchDetailPage() {
             </p>
           )}
         </div>
-      ) : showForm && !locked && match.status === 'scheduled' ? (
+      ) : showForm && !match.result && !match.predictionsBlocked ? (
         /* Prediction form */
         <form onSubmit={handleSubmit} className="rounded-2xl bg-white border border-gray-200 shadow-sm p-6 space-y-6">
           <h2 className="font-semibold text-gray-900">
@@ -228,6 +219,10 @@ export function MatchDetailPage() {
             </Button>
           </div>
         </form>
+      ) : match.predictionsBlocked ? (
+        <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800 text-center">
+          El administrador bloqueó las predicciones para este partido
+        </div>
       ) : null}
     </div>
   );

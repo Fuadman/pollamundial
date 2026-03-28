@@ -158,6 +158,19 @@ export class UserService {
     return this.userRepository.count();
   }
 
+  async searchUsers(query?: string, limit: number = 30): Promise<User[]> {
+    const qb = this.userRepository.createQueryBuilder('user');
+
+    if (query && query.trim().length > 0) {
+      const q = `%${query.trim().toLowerCase()}%`;
+      qb.where('LOWER(user.name) LIKE :q OR LOWER(user.email) LIKE :q', { q });
+    }
+
+    qb.orderBy('user.name', 'ASC').take(Math.min(Math.max(limit, 1), 100));
+
+    return qb.getMany();
+  }
+
   async updateUserRole(userId: string, role: string): Promise<User> {
     const user = await this.getUserById(userId);
     user.role = role;

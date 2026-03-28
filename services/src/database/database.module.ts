@@ -13,7 +13,6 @@ import {
   Prediction,
   UserScore,
   NewsArticle,
-  SimulationData,
 } from '../entities';
 
 const isDatabaseSslEnabled = (value?: string): boolean => value === 'true';
@@ -29,7 +28,7 @@ const isDatabaseSslEnabled = (value?: string): boolean => value === 'true';
         username: configService.get('DATABASE_USER', 'user'),
         password: configService.get('DATABASE_PASSWORD', 'password'),
         database: configService.get('DATABASE_NAME', 'copa_prediction'),
-        entities: [User, Team, Match, MatchResult, Prediction, UserScore, NewsArticle, SimulationData],
+        entities: [User, Team, Match, MatchResult, Prediction, UserScore, NewsArticle],
         migrations: ['src/migrations/*.ts'],
         migrationsTableName: 'typeorm_migrations',
         synchronize: configService.get('NODE_ENV') === 'development',
@@ -39,7 +38,7 @@ const isDatabaseSslEnabled = (value?: string): boolean => value === 'true';
           : false,
       }),
     }),
-    TypeOrmModule.forFeature([User, Team, Match, MatchResult, Prediction, UserScore, NewsArticle, SimulationData]),
+    TypeOrmModule.forFeature([User, Team, Match, MatchResult, Prediction, UserScore, NewsArticle]),
   ],
   providers: [DatabaseService, LoggerService, RedisService],
   controllers: [HealthController],

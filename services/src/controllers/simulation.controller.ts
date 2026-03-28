@@ -32,11 +32,35 @@ export class SimulationController {
     return { created: total, message: `${total} predicciones generadas` };
   }
 
+  @Post('generate-group-results')
+  async generateGroupResults(@Req() req: any) {
+    await this.adminService.enforceAdminAccess(req.user.id);
+    const result = await this.simulationService.generateRandomGroupResults();
+    return {
+      ...result,
+      message: `${result.published} resultados publicados, ${result.updated} actualizados y ${result.scoredPredictions} predicciones puntuadas`,
+    };
+  }
+
   @Get('leaderboard')
   async getLeaderboard(@Req() req: any) {
     await this.adminService.enforceAdminAccess(req.user.id);
     const leaderboard = await this.simulationService.getSimulatedLeaderboard();
     return { leaderboard };
+  }
+
+  @Get('users')
+  async getFakeUsers(@Req() req: any) {
+    await this.adminService.enforceAdminAccess(req.user.id);
+    const users = await this.simulationService.getFakeUsers();
+    return { users };
+  }
+
+  @Get('results')
+  async getSimulatedResults(@Req() req: any) {
+    await this.adminService.enforceAdminAccess(req.user.id);
+    const results = await this.simulationService.getSimulatedResults();
+    return { results };
   }
 
   @Delete('clear')

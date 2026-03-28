@@ -11,6 +11,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { MatchResultService } from '../services/match-result.service';
+import { PredictionService } from '../services/prediction.service';
 import { ScoringService } from '../services/scoring.service';
 import { ScoreUpdateService } from '../services/score-update.service';
 import { AdminService } from '../auth/services/admin.service';
@@ -38,6 +39,7 @@ export interface ResultResponse {
 export class AdminMatchResultController {
   constructor(
     private matchResultService: MatchResultService,
+    private predictionService: PredictionService,
     private scoringService: ScoringService,
     private scoreUpdateService: ScoreUpdateService,
     private adminService: AdminService,
@@ -215,6 +217,38 @@ export class AdminMatchResultController {
       team2Score: scoreUpdate.team2Score,
       timestamp: scoreUpdate.timestamp,
       connectedClients: this.scoreUpdateGateway.getConnectedClientsCount(matchId),
+    };
+  }
+
+  @Post(':matchId/block-predictions')
+  async blockPredictions(
+    @Param('matchId') matchId: string,
+    @Req() req: any,
+  ): Promise<{ matchId: string; lockedExistingPredictions: number; message: string }> {
+    await this.adminService.enforceAdminAccess(req.user.id);
+
+    const result = await this.predictionService.blockPredictionsForMatch(matchId);
+
+    return {
+      matchId,
+      lockedExistingPredictions: result.lockedExistingPredictions,
+      message: `Predicciones bloqueadas para el partido. ${result.lockedExistingPredictions} predicciones existentes fueron bloqueadas.`,
+    };
+  }
+
+  @Post(':matchId/unblock-predictions')
+  async unblockPredictions(
+    @Param('matchId') matchId: string,
+    @Req() req: any,
+  ): Promise<{ matchId: string; unlockedPredictions: number; message: string }> {
+    await this.adminService.enforceAdminAccess(req.user.id);
+
+    const result = await this.predictionService.unblockPredictionsForMatch(matchId);
+
+    return {
+      matchId,
+      unlockedPredictions: result.unlockedPredictions,
+      message: `Predicciones desbloqueadas para el partido. ${result.unlockedPredictions} predicciones fueron reabiertas.`,
     };
   }
 

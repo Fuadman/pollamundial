@@ -5,7 +5,6 @@ export { MatchResultService } from './match-result.service';
 export { PredictionService } from './prediction.service';
 export { UserScoreService } from './user-score.service';
 export { NewsArticleService } from './news-article.service';
-export { SimulationDataService } from './simulation-data.service';
 export { SeedingService } from './seeding.service';
 export { ScoringService } from './scoring.service';
 export { SimulationService } from './simulation.service';

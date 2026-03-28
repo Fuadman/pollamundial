@@ -8,7 +8,6 @@ import {
   Prediction,
   UserScore,
   NewsArticle,
-  SimulationData,
 } from '../entities';
 import {
   UserRepository,
@@ -18,7 +17,6 @@ import {
   PredictionRepository,
   UserScoreRepository,
   NewsArticleRepository,
-  SimulationDataRepository,
 } from '../repositories';
 import {
   UserService,
@@ -28,7 +26,6 @@ import {
   PredictionService,
   UserScoreService,
   NewsArticleService,
-  SimulationDataService,
   ScoringService,
   LockdownService,
   TimezoneService,
@@ -44,7 +41,6 @@ import {
       Prediction,
       UserScore,
       NewsArticle,
-      SimulationData,
     ]),
   ],
   providers: [
@@ -55,7 +51,6 @@ import {
     PredictionRepository,
     UserScoreRepository,
     NewsArticleRepository,
-    SimulationDataRepository,
     UserService,
     TeamService,
     MatchService,
@@ -63,7 +58,6 @@ import {
     PredictionService,
     UserScoreService,
     NewsArticleService,
-    SimulationDataService,
     ScoringService,
     LockdownService,
     TimezoneService,
@@ -76,7 +70,6 @@ import {
     PredictionRepository,
     UserScoreRepository,
     NewsArticleRepository,
-    SimulationDataRepository,
     UserService,
     TeamService,
     MatchService,
@@ -84,7 +77,6 @@ import {
     PredictionService,
     UserScoreService,
     NewsArticleService,
-    SimulationDataService,
     ScoringService,
     LockdownService,
     TimezoneService,

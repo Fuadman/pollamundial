@@ -238,6 +238,7 @@ export class MatchResultService {
       team2: match.team2,
       scheduledTime: match.scheduledTime,
       status: match.status,
+      predictionsBlocked: match.predictionsBlocked,
       phase: match.phase,
       group: match.groupStageGroup,
       eliminationRound: match.eliminationRound,

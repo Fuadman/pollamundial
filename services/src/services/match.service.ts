@@ -210,6 +210,7 @@ export class MatchService {
       phase: match.phase,
       groupStageGroup: match.groupStageGroup,
       eliminationRound: match.eliminationRound,
+      predictionsBlocked: match.predictionsBlocked,
       createdAt: match.createdAt,
       updatedAt: match.updatedAt,
     };

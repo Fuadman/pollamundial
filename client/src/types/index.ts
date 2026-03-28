@@ -50,6 +50,7 @@ export interface Match {
   team2: Team;
   scheduledTime: TimeInfo;
   lockdownTime: TimeInfo;
+  predictionsBlocked?: boolean;
   status: MatchStatus;
   phase: MatchPhase;
   groupStageGroup?: string | null;

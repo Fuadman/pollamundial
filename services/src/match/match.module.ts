@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MatchController } from '../controllers/match.controller';
+import { PredictionController } from '../controllers/prediction.controller';
+import { LeaderboardController } from '../controllers/leaderboard.controller';
 import { AdminMatchResultController } from '../controllers/admin-match-result.controller';
 import { AdminBracketController } from '../controllers/admin-bracket.controller';
 import { AdminUserController } from '../controllers/admin-user.controller';
@@ -18,6 +20,8 @@ import { SimulationService } from '../services/simulation.service';
   imports: [DataAccessModule, AuthModule, CacheModule],
   controllers: [
     MatchController,
+    PredictionController,
+    LeaderboardController,
     AdminMatchResultController,
     AdminBracketController,
     AdminUserController,

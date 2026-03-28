@@ -1,6 +1,47 @@
 import apiClient from './apiClient';
 import type { NewsArticle, MatchResult, Prediction, UserRole } from '../types';
 
+export interface AdminUserListItem {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+}
+
+export interface SimulationLeaderboardEntry {
+  rank: number;
+  userId: string;
+  name: string;
+  email: string;
+  totalPoints: number;
+  groupStagePoints: number;
+  eliminationPoints: number;
+  predictionsCount: number;
+}
+
+export interface SimulationUser {
+  userId: string;
+  name: string;
+  email: string;
+  totalPoints: number;
+  groupStagePoints: number;
+  eliminationPoints: number;
+  predictionsCount: number;
+}
+
+export interface SimulationMatchResult {
+  resultId: string;
+  matchId: string;
+  team1Name: string;
+  team2Name: string;
+  team1Score: number;
+  team2Score: number;
+  isDraw: boolean;
+  phase: string;
+  groupStageGroup: string | null;
+  publishedTimestamp: string;
+}
+
 export const adminService = {
   checkAccess: () =>
     apiClient.get<{ hasAccess: boolean; role: UserRole }>('/admin/check-access'),
@@ -22,6 +63,16 @@ export const adminService = {
   publishResult: (matchId: string, data: { team1Score: number; team2Score: number }) =>
     apiClient.post<MatchResult>(`/admin/matches/${matchId}/result`, data),
 
+  blockPredictions: (matchId: string) =>
+    apiClient.post<{ matchId: string; lockedExistingPredictions: number; message: string }>(
+      `/admin/matches/${matchId}/block-predictions`,
+    ),
+
+  unblockPredictions: (matchId: string) =>
+    apiClient.post<{ matchId: string; unlockedPredictions: number; message: string }>(
+      `/admin/matches/${matchId}/unblock-predictions`,
+    ),
+
   getResult: (matchId: string) =>
     apiClient.get<MatchResult>(`/admin/matches/${matchId}/result`),
 
@@ -39,6 +90,16 @@ export const adminService = {
     apiClient.post('/admin/bracket/semifinals', { teams }),
 
   // Users / roles
+  listUsers: (q?: string, limit: number = 30) =>
+    apiClient.get<{ users: AdminUserListItem[] }>('/admin/users', {
+      params: { q, limit },
+    }),
+
+  switchUser: (userId: string) =>
+    apiClient.post<{ message: string; user: AdminUserListItem; accessToken: string }>(
+      `/admin/users/switch/${userId}`,
+    ),
+
   enrollUser: (data: { email: string; name: string }) =>
     apiClient.post<{ user: any }>('/admin/users/enroll', data),
 
@@ -73,8 +134,17 @@ export const adminService = {
   generateSimulationPredictions: () =>
     apiClient.post('/admin/simulation/generate-predictions'),
 
+  generateSimulationGroupResults: () =>
+    apiClient.post('/admin/simulation/generate-group-results'),
+
   getSimulationLeaderboard: () =>
-    apiClient.get('/admin/simulation/leaderboard'),
+    apiClient.get<{ leaderboard: SimulationLeaderboardEntry[] }>('/admin/simulation/leaderboard'),
+
+  getSimulationUsers: () =>
+    apiClient.get<{ users: SimulationUser[] }>('/admin/simulation/users'),
+
+  getSimulationResults: () =>
+    apiClient.get<{ results: SimulationMatchResult[] }>('/admin/simulation/results'),
 
   clearSimulationData: () =>
     apiClient.delete('/admin/simulation/clear'),

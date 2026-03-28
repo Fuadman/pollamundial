@@ -63,6 +63,8 @@ export class MatchResponseDto {
   @IsString()
   eliminationRound?: string | null;
 
+  predictionsBlocked!: boolean;
+
   @IsDate()
   createdAt!: Date;
 

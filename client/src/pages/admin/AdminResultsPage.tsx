@@ -4,20 +4,79 @@ import { Button } from '../../components/ui/Button';
 import { useAppDispatch } from '../../app/hooks';
 import { addNotification } from '../../features/ui/uiSlice';
 import { formatMatchTime } from '../../utils/timezone';
-import type { Match } from '../../types';
+
+interface PendingMatch {
+  id: string;
+  team1Name: string;
+  team2Name: string;
+  scheduledTime: string;
+  status: string;
+  predictionsBlocked: boolean;
+}
+
+interface RawPendingMatch {
+  id?: string;
+  matchId?: string;
+  team1?: { name?: string };
+  team2?: { name?: string };
+  scheduledTime?: string;
+  status?: string;
+  predictionsBlocked?: boolean;
+}
+
+const statusLabel: Record<string, string> = {
+  scheduled: 'Programado',
+  in_progress: 'En juego',
+  completed: 'Resultado pendiente',
+  postponed: 'Postergado',
+};
+
+const normalizePendingMatch = (raw: RawPendingMatch): PendingMatch | null => {
+  const id = raw.id ?? raw.matchId;
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    team1Name: raw.team1?.name ?? 'Equipo 1',
+    team2Name: raw.team2?.name ?? 'Equipo 2',
+    scheduledTime: raw.scheduledTime ?? new Date().toISOString(),
+    status: raw.status ?? 'completed',
+    predictionsBlocked: raw.predictionsBlocked ?? false,
+  };
+};
 
 export function AdminResultsPage() {
   const dispatch = useAppDispatch();
-  const [pendingMatches, setPendingMatches] = useState<Match[]>([]);
+  const [pendingMatches, setPendingMatches] = useState<PendingMatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<{ matchId: string; team1Score: number; team2Score: number } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [blockingMatchId, setBlockingMatchId] = useState<string | null>(null);
+  const [unblockingMatchId, setUnblockingMatchId] = useState<string | null>(null);
+
+  const isTogglingMatch = (matchId: string) =>
+    blockingMatchId === matchId || unblockingMatchId === matchId;
 
   const loadPending = async () => {
     setLoading(true);
     try {
       const r = await adminService.getPendingResults();
-      setPendingMatches(r.data);
+      const payload = Array.isArray(r.data)
+        ? r.data
+        : Array.isArray((r.data as any)?.matches)
+          ? (r.data as any).matches
+          : [];
+
+      const normalized = (payload as RawPendingMatch[])
+        .map(normalizePendingMatch)
+        .filter((m): m is PendingMatch => m !== null);
+
+      setPendingMatches(normalized);
+    } catch {
+      setPendingMatches([]);
+      dispatch(addNotification({ type: 'error', message: 'No se pudieron cargar los partidos pendientes' }));
     } finally {
       setLoading(false);
     }
@@ -43,6 +102,42 @@ export function AdminResultsPage() {
     }
   };
 
+  const handleBlockPredictions = async (matchId: string) => {
+    setBlockingMatchId(matchId);
+    try {
+      const response = await adminService.blockPredictions(matchId);
+      dispatch(
+        addNotification({
+          type: 'success',
+          message: response.data.message || 'Predicciones bloqueadas',
+        }),
+      );
+      await loadPending();
+    } catch {
+      dispatch(addNotification({ type: 'error', message: 'Error al bloquear predicciones' }));
+    } finally {
+      setBlockingMatchId(null);
+    }
+  };
+
+  const handleUnblockPredictions = async (matchId: string) => {
+    setUnblockingMatchId(matchId);
+    try {
+      const response = await adminService.unblockPredictions(matchId);
+      dispatch(
+        addNotification({
+          type: 'success',
+          message: response.data.message || 'Predicciones desbloqueadas',
+        }),
+      );
+      await loadPending();
+    } catch {
+      dispatch(addNotification({ type: 'error', message: 'Error al desbloquear predicciones' }));
+    } finally {
+      setUnblockingMatchId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <h2 className="text-lg font-semibold text-gray-900">Partidos pendientes de resultado</h2>
@@ -60,9 +155,14 @@ export function AdminResultsPage() {
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
                   <p className="font-semibold text-gray-900">
-                    {match.team1.name} vs {match.team2.name}
+                    {match.team1Name} vs {match.team2Name}
                   </p>
-                  <p className="text-xs text-gray-400">{formatMatchTime(match.scheduledTime)}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <p className="text-xs text-gray-400">{formatMatchTime(match.scheduledTime)}</p>
+                    <span className="rounded-full bg-gray-100 text-gray-600 px-2 py-0.5 text-[11px] font-medium">
+                      {statusLabel[match.status] ?? match.status}
+                    </span>
+                  </div>
                 </div>
                 <Button
                   size="sm"
@@ -72,6 +172,24 @@ export function AdminResultsPage() {
                 >
                   Ingresar resultado
                 </Button>
+                <Button
+                  size="sm"
+                  variant={match.predictionsBlocked ? 'ghost' : 'danger'}
+                  disabled={isTogglingMatch(match.id)}
+                  onClick={() =>
+                    match.predictionsBlocked
+                      ? handleUnblockPredictions(match.id)
+                      : handleBlockPredictions(match.id)
+                  }
+                >
+                  {blockingMatchId === match.id
+                    ? 'Bloqueando...'
+                    : unblockingMatchId === match.id
+                      ? 'Desbloqueando...'
+                      : match.predictionsBlocked
+                        ? 'Desbloquear predicciones'
+                        : 'Bloquear predicciones'}
+                </Button>
               </div>
 
               {/* Inline result form */}
@@ -79,7 +197,7 @@ export function AdminResultsPage() {
                 <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
                   <div className="flex items-center justify-center gap-6">
                     <div className="flex flex-col items-center gap-1">
-                      <p className="text-xs font-medium text-gray-600">{match.team1.name}</p>
+                      <p className="text-xs font-medium text-gray-600">{match.team1Name}</p>
                       <input
                         type="number"
                         min={0}
@@ -91,7 +209,7 @@ export function AdminResultsPage() {
                     </div>
                     <span className="text-2xl font-bold text-gray-300">–</span>
                     <div className="flex flex-col items-center gap-1">
-                      <p className="text-xs font-medium text-gray-600">{match.team2.name}</p>
+                      <p className="text-xs font-medium text-gray-600">{match.team2Name}</p>
                       <input
                         type="number"
                         min={0}

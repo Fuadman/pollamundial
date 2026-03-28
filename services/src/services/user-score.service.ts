@@ -111,4 +111,12 @@ export class UserScoreService {
     // For now, just return the current score
     return this.getUserScore(userId);
   }
+
+  async getLeaderboardPage(
+    phase: 'all' | 'group' | 'elimination',
+    page: number,
+    limit: number,
+  ): Promise<{ rows: UserScore[]; total: number }> {
+    return this.userScoreRepository.findLeaderboardPage(phase, page, limit);
+  }
 }

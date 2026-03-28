@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../app/hooks';
 import { fetchMatches, setFilters } from '../features/matches/matchesSlice';
+import { fetchUserPredictions } from '../features/predictions/predictionsSlice';
 import { MatchCard } from '../components/shared/MatchCard';
 import type { MatchPhase, MatchStatus } from '../types';
 
@@ -12,6 +13,7 @@ export function MatchesPage() {
   const navigate = useNavigate();
   const { items: matches, loading } = useAppSelector((s) => s.matches);
   const predictions = useAppSelector((s) => s.predictions.items);
+  const user = useAppSelector((s) => s.auth.user);
 
   const [phase, setPhase] = useState<MatchPhase | 'all'>('all');
   const [group, setGroup] = useState<string>('');
@@ -26,9 +28,21 @@ export function MatchesPage() {
     dispatch(setFilters({ phase: phase === 'all' ? undefined : phase, group, status: status || undefined }));
   }, [dispatch, phase, group, status]);
 
+  useEffect(() => {
+    if (user) {
+      dispatch(fetchUserPredictions(user.id));
+    }
+  }, [dispatch, user]);
+
   const getPrediction = (matchId: string) => {
     const p = predictions.find((pr) => pr.matchId === matchId);
-    return p ? { team1Score: p.predictedTeam1Score, team2Score: p.predictedTeam2Score } : null;
+    return p
+      ? {
+          team1Score: p.predictedTeam1Score,
+          team2Score: p.predictedTeam2Score,
+          pointsEarned: p.pointsEarned,
+        }
+      : null;
   };
 
   return (

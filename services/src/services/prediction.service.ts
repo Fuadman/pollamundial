@@ -4,15 +4,13 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import { PredictionRepository } from '../repositories/prediction.repository';
 import { MatchRepository } from '../repositories/match.repository';
 import { UserRepository } from '../repositories/user.repository';
 import { UserScoreRepository } from '../repositories/user-score.repository';
 import { Prediction } from '../entities/prediction.entity';
 import { UserScore } from '../entities/user-score.entity';
-import { MatchStatus } from '../entities/match.entity';
-import { LockdownService } from './lockdown.service';
 import { v4 as uuid } from 'uuid';
 
 @Injectable()
@@ -22,7 +20,6 @@ export class PredictionService {
     private matchRepository: MatchRepository,
     private userRepository: UserRepository,
     private userScoreRepository: UserScoreRepository,
-    private lockdownService: LockdownService,
     private dataSource: DataSource,
   ) {}
 
@@ -45,18 +42,24 @@ export class PredictionService {
     }
 
     // Validate match exists
-    const match = await this.matchRepository.findOne({ where: { id: matchId } });
+    const match = await this.matchRepository.findOne({
+      where: { id: matchId },
+      relations: ['result'],
+    });
     if (!match) {
       throw new NotFoundException(`Match with ID ${matchId} not found`);
     }
 
-    // Check if match is locked using lockdown service
-    await this.lockdownService.validatePredictionNotLocked(matchId);
-
-    // Check if match has already concluded
-    if (match.status === MatchStatus.COMPLETED) {
+    // Users can submit/edit predictions until the admin publishes an official result.
+    if (match.result) {
       throw new BadRequestException(
-        'Cannot predict on concluded matches',
+        'Cannot submit prediction after result publication',
+      );
+    }
+
+    if (match.predictionsBlocked) {
+      throw new BadRequestException(
+        'Predictions for this match are blocked by admin',
       );
     }
 
@@ -137,7 +140,7 @@ export class PredictionService {
   ): Promise<Prediction> {
     const prediction = await this.predictionRepository.findOne({
       where: { id: predictionId },
-      relations: ['match'],
+      relations: ['match', 'match.result'],
     });
 
     if (!prediction) {
@@ -151,11 +154,17 @@ export class PredictionService {
       );
     }
 
-    // Check if prediction is locked using lockdown service
-    await this.lockdownService.validatePredictionCanBeEdited(predictionId);
+    if (prediction.match.result) {
+      throw new BadRequestException(
+        'Cannot edit prediction after result publication',
+      );
+    }
 
-    // Check if match lockdown has passed
-    await this.lockdownService.validatePredictionNotLocked(prediction.matchId);
+    if (prediction.match.predictionsBlocked) {
+      throw new BadRequestException(
+        'Predictions for this match are blocked by admin',
+      );
+    }
 
     // Update prediction
     prediction.predictedTeam1Score = predictedTeam1Score ?? null;
@@ -170,11 +179,46 @@ export class PredictionService {
     userId: string,
     matchId: string,
   ): Promise<Prediction | null> {
-    return this.predictionRepository.findByUserAndMatch(userId, matchId);
+    const prediction = await this.predictionRepository.findByUserAndMatch(userId, matchId);
+    if (!prediction) {
+      return null;
+    }
+
+    const match = await this.matchRepository.findOne({
+      where: { id: prediction.matchId },
+      relations: ['team1', 'team2', 'result'],
+    });
+
+    if (match) {
+      (prediction as Prediction & { match: any }).match = match;
+    }
+
+    return prediction;
   }
 
   async getUserPredictions(userId: string): Promise<Prediction[]> {
-    return this.predictionRepository.findByUserId(userId);
+    const predictions = await this.predictionRepository.findByUserId(userId);
+
+    if (predictions.length === 0) {
+      return predictions;
+    }
+
+    const matchIds = Array.from(new Set(predictions.map((p) => p.matchId)));
+    const matches = await this.matchRepository.find({
+      where: { id: In(matchIds) },
+      relations: ['team1', 'team2', 'result'],
+    });
+
+    const matchesById = new Map(matches.map((match) => [match.id, match]));
+
+    for (const prediction of predictions) {
+      const match = matchesById.get(prediction.matchId);
+      if (match) {
+        (prediction as Prediction & { match: any }).match = match;
+      }
+    }
+
+    return predictions;
   }
 
   async getMatchPredictions(matchId: string): Promise<Prediction[]> {
@@ -214,6 +258,59 @@ export class PredictionService {
 
   async lockPredictionsByMatch(matchId: string): Promise<void> {
     await this.predictionRepository.lockPredictionsByMatch(matchId);
+  }
+
+  async blockPredictionsForMatch(matchId: string): Promise<{ lockedExistingPredictions: number }> {
+    const match = await this.matchRepository.findOne({ where: { id: matchId } });
+
+    if (!match) {
+      throw new NotFoundException(`Match with ID ${matchId} not found`);
+    }
+
+    if (!match.predictionsBlocked) {
+      match.predictionsBlocked = true;
+      await this.matchRepository.save(match);
+    }
+
+    const unlocked = await this.predictionRepository.findUnlockedPredictions(matchId);
+    const toLock = unlocked.length;
+
+    if (toLock > 0) {
+      await this.predictionRepository.lockPredictionsByMatch(matchId);
+    }
+
+    return { lockedExistingPredictions: toLock };
+  }
+
+  async unblockPredictionsForMatch(matchId: string): Promise<{ unlockedPredictions: number }> {
+    const match = await this.matchRepository.findOne({
+      where: { id: matchId },
+      relations: ['result'],
+    });
+
+    if (!match) {
+      throw new NotFoundException(`Match with ID ${matchId} not found`);
+    }
+
+    if (match.result) {
+      throw new BadRequestException(
+        'Cannot unblock predictions after result publication',
+      );
+    }
+
+    const locked = await this.predictionRepository.findLockedPredictions(matchId);
+    const unlockedPredictions = locked.length;
+
+    if (match.predictionsBlocked) {
+      match.predictionsBlocked = false;
+      await this.matchRepository.save(match);
+    }
+
+    if (unlockedPredictions > 0) {
+      await this.predictionRepository.unlockPredictionsByMatch(matchId);
+    }
+
+    return { unlockedPredictions };
   }
 
   async updatePredictionPoints(predictionId: string, points: number): Promise<void> {
