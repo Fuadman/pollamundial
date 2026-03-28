@@ -28,4 +28,30 @@ export class SeedingController {
       throw error;
     }
   }
+
+  /**
+   * Clears all existing data and seeds the real Copa Mundial 2026 schedule:
+   * 48 teams in 12 groups (A–L), 72 matches with exact kickoff times (UTC).
+   */
+  @Post('copa-mundial-2026')
+  async seedCopaMundial2026(): Promise<{
+    success: boolean;
+    teamsCreated: number;
+    matchesCreated: number;
+    message: string;
+  }> {
+    try {
+      const result = await this.seedingService.reseedCopaMundial2026();
+
+      return {
+        success: true,
+        teamsCreated: result.teamsCreated,
+        matchesCreated: result.matchesCreated,
+        message: `Copa Mundial 2026 seeded: ${result.teamsCreated} equipos, ${result.matchesCreated} partidos`,
+      };
+    } catch (error) {
+      this.logger.error('Copa Mundial 2026 seeding failed:', error);
+      throw error;
+    }
+  }
 }

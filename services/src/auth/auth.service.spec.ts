@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UserService } from '../services/user.service';
 import { User } from '../entities/user.entity';
@@ -37,8 +37,9 @@ describe('AuthService', () => {
           useValue: {
             getUserById: jest.fn(),
             getUserByGoogleId: jest.fn(),
-            createUser: jest.fn(),
+            getUserByEmail: jest.fn(),
             updateUserProfile: jest.fn(),
+            updateGoogleIdentity: jest.fn(),
             completeRegistration: jest.fn(),
             completePayment: jest.fn(),
           },
@@ -72,7 +73,7 @@ describe('AuthService', () => {
   });
 
   describe('validateGoogleUser', () => {
-    it('should create a new user if not exists', async () => {
+    it('should bind Google login to an enrolled user found by email', async () => {
       const profile = {
         googleId: 'google-123',
         email: 'test@example.com',
@@ -80,15 +81,17 @@ describe('AuthService', () => {
       };
 
       jest.spyOn(userService, 'getUserByGoogleId').mockResolvedValue(null);
-      jest.spyOn(userService, 'createUser').mockResolvedValue(mockUser);
+      jest.spyOn(userService, 'getUserByEmail').mockResolvedValue(mockUser);
+      jest.spyOn(userService, 'updateGoogleIdentity').mockResolvedValue(mockUser);
 
       const result = await service.validateGoogleUser(profile);
 
       expect(result).toEqual(mockUser);
-      expect(userService.createUser).toHaveBeenCalledWith(
+      expect(userService.updateGoogleIdentity).toHaveBeenCalledWith(
+        mockUser.id,
         'google-123',
-        'test@example.com',
         'Test User',
+        'test@example.com',
       );
     });
 
@@ -104,7 +107,23 @@ describe('AuthService', () => {
       const result = await service.validateGoogleUser(profile);
 
       expect(result).toEqual(mockUser);
-      expect(userService.createUser).not.toHaveBeenCalled();
+      expect(userService.getUserByEmail).not.toHaveBeenCalled();
+      expect(userService.updateGoogleIdentity).not.toHaveBeenCalled();
+    });
+
+    it('should throw error if the Google account is not enrolled', async () => {
+      const profile = {
+        googleId: 'google-123',
+        email: 'test@example.com',
+        name: 'Test User',
+      };
+
+      jest.spyOn(userService, 'getUserByGoogleId').mockResolvedValue(null);
+      jest.spyOn(userService, 'getUserByEmail').mockResolvedValue(null);
+
+      await expect(service.validateGoogleUser(profile)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
 
     it('should throw error if profile data is invalid', async () => {

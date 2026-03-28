@@ -182,12 +182,18 @@ export class MatchService {
 
     const dto: MatchResponseDto = {
       id: match.id,
-      team1Id: match.team1Id,
-      team2Id: match.team2Id,
-      team1Name: match.team1?.name || '',
-      team2Name: match.team2?.name || '',
-      team1Code: match.team1?.code,
-      team2Code: match.team2?.code,
+      team1: {
+        id: match.team1Id,
+        name: match.team1?.name || '',
+        code: match.team1?.code || '',
+        groupStageGroup: match.team1?.groupStageGroup || null,
+      },
+      team2: {
+        id: match.team2Id,
+        name: match.team2?.name || '',
+        code: match.team2?.code || '',
+        groupStageGroup: match.team2?.groupStageGroup || null,
+      },
       scheduledTime: {
         utcTime: match.scheduledTime,
         localTime: scheduledTimeInfo.localTime,

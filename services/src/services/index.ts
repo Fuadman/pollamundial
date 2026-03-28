@@ -8,6 +8,7 @@ export { NewsArticleService } from './news-article.service';
 export { SimulationDataService } from './simulation-data.service';
 export { SeedingService } from './seeding.service';
 export { ScoringService } from './scoring.service';
+export { SimulationService } from './simulation.service';
 export { LockdownService } from './lockdown.service';
 export { TimezoneService } from './timezone.service';
 export { BracketService } from './bracket.service';

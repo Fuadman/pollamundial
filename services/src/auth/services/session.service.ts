@@ -161,7 +161,12 @@ export class SessionService {
       return null;
     }
 
-    return JSON.parse(session as string);
+    // RedisService#get already deserializes JSON values when possible.
+    if (typeof session === 'string') {
+      return JSON.parse(session);
+    }
+
+    return session;
   }
 
   async isSessionActive(userId: string): Promise<boolean> {

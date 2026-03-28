@@ -70,6 +70,28 @@ export class UserService {
     return this.userRepository.save(user);
   }
 
+  async updateGoogleIdentity(
+    userId: string,
+    googleId: string,
+    name: string,
+    email: string,
+  ): Promise<User> {
+    const user = await this.getUserById(userId);
+
+    if (email !== user.email) {
+      const existingUser = await this.userRepository.findByEmail(email);
+      if (existingUser && existingUser.id !== userId) {
+        throw new BadRequestException('Email is already in use');
+      }
+    }
+
+    user.googleId = googleId;
+    user.name = name;
+    user.email = email;
+
+    return this.userRepository.save(user);
+  }
+
   async completeRegistration(userId: string): Promise<User> {
     const user = await this.getUserById(userId);
 
@@ -96,7 +118,7 @@ export class UserService {
 
   async isUserRegistered(userId: string): Promise<boolean> {
     const user = await this.getUserById(userId);
-    return user.registrationCompleted && user.paymentCompleted;
+    return user.registrationCompleted;
   }
 
   async getRegisteredUsers(): Promise<User[]> {
@@ -128,7 +150,6 @@ export class UserService {
     return this.userRepository.count({
       where: {
         registrationCompleted: true,
-        paymentCompleted: true,
       },
     });
   }

@@ -1,5 +1,4 @@
 import { DataSource } from 'typeorm';
-import { seedCopaAmerica2024 } from './copa-america-2024.seed';
 import { seedCopaMundial2026 } from './copa-mundial-2026.seed';
 import * as dotenv from 'dotenv';
 
@@ -8,11 +7,11 @@ dotenv.config();
 async function runSeed() {
   const dataSource = new DataSource({
     type: 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || '5432'),
-    username: process.env.DB_USERNAME || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
-    database: process.env.DB_NAME || 'sports_prediction',
+    host: process.env.DATABASE_HOST || process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DATABASE_PORT || process.env.DB_PORT || '5432'),
+    username: process.env.DATABASE_USER || process.env.DB_USERNAME || 'postgres',
+    password: process.env.DATABASE_PASSWORD || process.env.DB_PASSWORD || 'postgres',
+    database: process.env.DATABASE_NAME || process.env.DB_NAME || 'copa_prediction',
     entities: ['src/entities/**/*.entity.ts'],
     migrations: ['src/migrations/**/*.ts'],
     synchronize: false,
@@ -23,11 +22,12 @@ async function runSeed() {
     await dataSource.initialize();
     console.log('Database connection established');
 
-    // Seed Copa América 2024 (if not already seeded)
-    await seedCopaAmerica2024(dataSource);
+    const force = process.argv.includes('--force');
+    if (force) {
+      console.log('--force flag detected: will clear existing data before seeding');
+    }
 
-    // Seed Copa Mundial 2026
-    await seedCopaMundial2026(dataSource);
+    await seedCopaMundial2026(dataSource, force);
 
     await dataSource.destroy();
     console.log('Seeding completed successfully');

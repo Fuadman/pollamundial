@@ -1,55 +1,87 @@
-services:
-  api:
-    build:
-      context: ./services
-      dockerfile: Dockerfile
-    container_name: polla_api
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      DATABASE_HOST: postgres
-      DATABASE_PORT: 5432
-      DATABASE_USER: ${DATABASE_USER:-user}
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-password}
-      DATABASE_NAME: ${DATABASE_NAME:-copa_prediction}
-      DATABASE_SSL: "false"
-      DATABASE_URL: postgres://${DATABASE_USER:-user}:${DATABASE_PASSWORD:-password}@postgres:5432/${DATABASE_NAME:-copa_prediction}
-      REDIS_URL: redis://redis:6379
-    ports:
-      - "${API_PORT:-3001}:3000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+version: '3.8'
 
+services:
+  # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: polla_postgres
+    container_name: pollamundial_db
     environment:
-      POSTGRES_USER: ${DATABASE_USER:-user}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-password}
-      POSTGRES_DB: ${DATABASE_NAME:-copa_prediction}
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: copa_prediction
+    ports:
+      - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-user} -d ${DATABASE_NAME:-copa_prediction}"]
+      test: ["CMD-SHELL", "pg_isready -U user"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
     restart: unless-stopped
 
+  # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: polla_redis
+    container_name: pollamundial_redis
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+    restart: unless-stopped
+
+  # Backend (NestJS)
+  backend:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+    container_name: pollamundial_backend
+    env_file:
+      - ./.env.docker
+    environment:
+      NODE_ENV: development
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: user
+      DATABASE_PASSWORD: password
+      DATABASE_NAME: copa_prediction
+      REDIS_URL: redis://redis:6379
+      GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
+      JWT_EXPIRATION: 3600
+      PORT: 3000
+      LOG_LEVEL: debug
+      TIMEZONE: America/La_Paz
+      ENABLE_TESTING_MODE: false
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/src:/app/src
+    command: npm run start:dev
+    restart: unless-stopped
+
+  # Frontend (Vite)
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: pollamundial_frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      VITE_BACKEND_URL: http://backend:3000
+    volumes:
+      - ./client/src:/app/src
+    command: npm run dev -- --host 0.0.0.0
     restart: unless-stopped
 
 volumes:

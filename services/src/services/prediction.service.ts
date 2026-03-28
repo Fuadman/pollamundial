@@ -10,6 +10,7 @@ import { MatchRepository } from '../repositories/match.repository';
 import { UserRepository } from '../repositories/user.repository';
 import { UserScoreRepository } from '../repositories/user-score.repository';
 import { Prediction } from '../entities/prediction.entity';
+import { UserScore } from '../entities/user-score.entity';
 import { MatchStatus } from '../entities/match.entity';
 import { LockdownService } from './lockdown.service';
 import { v4 as uuid } from 'uuid';
@@ -39,10 +40,8 @@ export class PredictionService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    if (!user.registrationCompleted || !user.paymentCompleted) {
-      throw new ForbiddenException(
-        'User must complete registration and payment to submit predictions',
-      );
+    if (!user.registrationCompleted) {
+      throw new ForbiddenException('User must complete registration to submit predictions');
     }
 
     // Validate match exists
@@ -100,22 +99,19 @@ export class PredictionService {
       const savedPrediction = await queryRunner.manager.save(prediction);
 
       // Ensure user score exists
-      let userScore = await queryRunner.manager.findOne(
-        'user_scores',
-        {
-          where: { userId },
-        },
-      );
+      let userScore = await queryRunner.manager.findOne(UserScore, {
+        where: { userId },
+      });
 
       if (!userScore) {
-        userScore = {
+        const newUserScore = queryRunner.manager.create(UserScore, {
           id: uuid(),
           userId,
           totalPoints: 0,
           groupStagePoints: 0,
           eliminationPoints: 0,
-        };
-        await queryRunner.manager.save('user_scores', userScore);
+        });
+        await queryRunner.manager.save(UserScore, newUserScore);
       }
 
       await queryRunner.commitTransaction();

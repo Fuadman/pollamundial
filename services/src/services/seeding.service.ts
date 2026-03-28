@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { Team } from '../entities/team.entity';
 import { Match, MatchPhase, MatchStatus } from '../entities/match.entity';
 import { v4 as uuid } from 'uuid';
+import { seedCopaMundial2026 } from '../seeds/copa-mundial-2026.seed';
 
 interface TeamData {
   name: string;
@@ -333,5 +334,17 @@ export class SeedingService {
     currentDate.setDate(currentDate.getDate() + 1);
 
     return { matches, nextDate: currentDate };
+  }
+
+  /**
+   * Clears all existing match and team data, then seeds Copa Mundial 2026
+   * with the real 48-team, 72-match schedule.
+   */
+  async reseedCopaMundial2026(): Promise<{
+    teamsCreated: number;
+    matchesCreated: number;
+  }> {
+    this.logger.log('Reseeding Copa Mundial 2026 (force mode)...');
+    return seedCopaMundial2026(this.dataSource, true);
   }
 }

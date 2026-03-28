@@ -30,11 +30,19 @@ export class AuthService {
 
     let user = await this.userService.getUserByGoogleId(googleId);
 
-    if (!user) {
-      user = await this.userService.createUser(googleId, email, name);
+    if (user) {
+      return user;
     }
 
-    return user;
+    user = await this.userService.getUserByEmail(email);
+
+    if (!user) {
+      throw new UnauthorizedException(
+        'Tu cuenta no esta inscrita. Solicita al administrador que te registre primero.',
+      );
+    }
+
+    return this.userService.updateGoogleIdentity(user.id, googleId, name, email);
   }
 
   async generateJwt(user: User): Promise<string> {

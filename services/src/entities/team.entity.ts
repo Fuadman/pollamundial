@@ -18,7 +18,7 @@ export class Team {
   @Column('varchar', { length: 255 })
   name!: string;
 
-  @Column('varchar', { length: 3, unique: true })
+  @Column('varchar', { length: 10, unique: true })
   code!: string;
 
   @Column('varchar', { length: 1, nullable: true })

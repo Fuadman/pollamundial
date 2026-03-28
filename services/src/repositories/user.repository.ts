@@ -20,17 +20,15 @@ export class UserRepository extends Repository<User> {
     return this.find({
       where: {
         registrationCompleted: true,
-        paymentCompleted: true,
       },
     });
   }
 
   async findUnregisteredUsers(): Promise<User[]> {
     return this.find({
-      where: [
-        { registrationCompleted: false },
-        { paymentCompleted: false },
-      ],
+      where: {
+        registrationCompleted: false,
+      },
     });
   }
 

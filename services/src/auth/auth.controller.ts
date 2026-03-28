@@ -37,25 +37,18 @@ export class AuthController {
   async googleAuthCallback(@Req() req: any, @Res() res: Response) {
     try {
       const user = await this.authService.validateGoogleUser(req.user);
-      const { accessToken, refreshToken, expiresIn } =
-        await this.sessionService.createSession(user);
+      const { accessToken } = await this.sessionService.createSession(user);
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const redirectUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(accessToken)}`;
 
-      const requiresRegistration = !user.registrationCompleted;
-
-      // In production, redirect to frontend with token
-      // For now, return JSON response
-      return res.json({
-        accessToken,
-        refreshToken,
-        expiresIn,
-        user,
-        requiresRegistration,
-      });
+      return res.redirect(redirectUrl);
     } catch (error) {
-      return res.status(400).json({
-        error:
-          error instanceof Error ? error.message : 'Authentication failed',
-      });
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const message =
+        error instanceof Error ? error.message : 'Authentication failed';
+      return res.redirect(
+        `${frontendUrl}/login?error=${encodeURIComponent(message)}`,
+      );
     }
   }
 

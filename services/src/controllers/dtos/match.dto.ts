@@ -1,6 +1,24 @@
 import { IsString, IsDate, IsOptional, IsNumber } from 'class-validator';
 
 /**
+ * Team response DTO
+ */
+export class TeamDto {
+  @IsString()
+  id!: string;
+
+  @IsString()
+  name!: string;
+
+  @IsString()
+  code!: string;
+
+  @IsOptional()
+  @IsString()
+  groupStageGroup?: string | null;
+}
+
+/**
  * Timezone information for a match time
  */
 export class TimezoneInfoDto {
@@ -24,25 +42,8 @@ export class MatchResponseDto {
   @IsString()
   id!: string;
 
-  @IsString()
-  team1Id!: string;
-
-  @IsString()
-  team2Id!: string;
-
-  @IsString()
-  team1Name!: string;
-
-  @IsString()
-  team2Name!: string;
-
-  @IsOptional()
-  @IsString()
-  team1Code?: string;
-
-  @IsOptional()
-  @IsString()
-  team2Code?: string;
+  team1!: TeamDto;
+  team2!: TeamDto;
 
   scheduledTime!: TimezoneInfoDto;
 

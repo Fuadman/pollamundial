@@ -1,5 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
+import {
+  ConnectedSocket,
+  MessageBody,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  OnGatewayInit,
+  SubscribeMessage,
+  WebSocketGateway,
+  WebSocketServer,
+} from '@nestjs/websockets';
 import { LoggerService } from '../common/logger/logger.service';
 
 /**
@@ -8,39 +18,24 @@ import { LoggerService } from '../common/logger/logger.service';
  * Requirement 17.5: Ensure consistent score information across multiple users
  */
 @Injectable()
-export class ScoreUpdateGateway {
+@WebSocketGateway({
+  path: '/socket.io',
+  cors: {
+    origin: '*',
+    credentials: true,
+  },
+})
+export class ScoreUpdateGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
+  @WebSocketServer()
   server!: Server;
   private connectedClients = new Map<string, Set<string>>(); // matchId -> Set of socketIds
 
   constructor(private logger: LoggerService) {}
 
-  /**
-   * Initialize the gateway with a Socket.io server instance
-   */
-  setServer(server: Server): void {
-    this.server = server;
-    this.setupEventHandlers();
-  }
-
-  /**
-   * Setup event handlers for Socket.io
-   */
-  private setupEventHandlers(): void {
-    this.server.on('connection', (socket: Socket) => {
-      this.handleConnection(socket);
-
-      socket.on('match:subscribe', (data: { matchId: string }) => {
-        this.handleSubscribeToMatch(socket, data);
-      });
-
-      socket.on('match:unsubscribe', (data: { matchId: string }) => {
-        this.handleUnsubscribeFromMatch(socket, data);
-      });
-
-      socket.on('disconnect', () => {
-        this.handleDisconnect(socket);
-      });
-    });
+  afterInit() {
+    this.logger.log('Socket.IO gateway initialized');
   }
 
   /**
@@ -65,6 +60,22 @@ export class ScoreUpdateGateway {
         }
       }
     }
+  }
+
+  @SubscribeMessage('match:subscribe')
+  onSubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { matchId: string },
+  ): void {
+    this.handleSubscribeToMatch(client, data);
+  }
+
+  @SubscribeMessage('match:unsubscribe')
+  onUnsubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { matchId: string },
+  ): void {
+    this.handleUnsubscribeFromMatch(client, data);
   }
 
   /**
@@ -135,6 +146,15 @@ export class ScoreUpdateGateway {
     const connectedCount = this.connectedClients.get(matchId)?.size || 0;
 
     this.server.to(room).emit('match:score-update', {
+      matchId,
+      team1Score,
+      team2Score,
+      timestamp,
+      connectedClients: connectedCount,
+    });
+
+    // Backward-compatible event name used by the current frontend slice.
+    this.server.to(room).emit('score-update', {
       matchId,
       team1Score,
       team2Score,
