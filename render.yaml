@@ -1,0 +1,88 @@
+services:
+  - type: web
+    name: pollamundial-api
+    runtime: node
+    rootDir: services
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm run migration:run && npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: DATABASE_HOST
+        fromDatabase:
+          name: pollamundial-postgres
+          property: host
+      - key: DATABASE_PORT
+        fromDatabase:
+          name: pollamundial-postgres
+          property: port
+      - key: DATABASE_USER
+        fromDatabase:
+          name: pollamundial-postgres
+          property: user
+      - key: DATABASE_PASSWORD
+        fromDatabase:
+          name: pollamundial-postgres
+          property: password
+      - key: DATABASE_NAME
+        fromDatabase:
+          name: pollamundial-postgres
+          property: database
+      - key: DATABASE_SSL
+        value: true
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: pollamundial-redis
+          property: connectionString
+      - key: JWT_EXPIRATION
+        value: 3600
+      - key: LOG_LEVEL
+        value: info
+      - key: TIMEZONE
+        value: America/La_Paz
+      - key: ENABLE_TESTING_MODE
+        value: false
+      - key: ENABLE_SIMULATION_API
+        value: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+
+  - type: web
+    name: pollamundial-web
+    runtime: static
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_SOCKET_URL
+        sync: false
+
+  - type: redis
+    name: pollamundial-redis
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
+
+databases:
+  - name: pollamundial-postgres
+    plan: starter
+    databaseName: copa_prediction
+    user: user
