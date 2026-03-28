@@ -80,6 +80,9 @@ services:
     name: pollamundial-redis
     plan: starter
     maxmemoryPolicy: allkeys-lru
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: Temporary allow list for initial provisioning
 
 databases:
   - name: pollamundial-postgres
