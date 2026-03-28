@@ -1,0 +1,28 @@
+# Environment variables - NEVER commit real credentials
+.env
+.env.docker
+.env.local
+.env.production
+services/.env
+services/.env.local
+
+# Node
+node_modules/
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Docker volumes (local data)
+postgres_data/
+redis_data/
