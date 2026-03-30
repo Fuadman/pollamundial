@@ -22,6 +22,7 @@ export class MatchController {
   @Get()
   async getMatches(
     @Query('phase') phase?: string,
+    @Query('eliminationRound') eliminationRound?: string,
     @Query('status') status?: string,
     @Query('group') group?: string,
     @Query('startDate') startDate?: string,
@@ -42,6 +43,12 @@ export class MatchController {
     if (status && !Object.values(MatchStatus).includes(status as MatchStatus)) {
       throw new BadRequestException(
         `Invalid status. Must be one of: ${Object.values(MatchStatus).join(', ')}`,
+      );
+    }
+
+    if (eliminationRound && phase && phase !== MatchPhase.ELIMINATION) {
+      throw new BadRequestException(
+        'eliminationRound filter only applies to elimination phase matches',
       );
     }
 
@@ -77,6 +84,9 @@ export class MatchController {
         }
         matches = matches.filter((m) => m.groupStageGroup === group);
       }
+      if (eliminationRound) {
+        matches = matches.filter((m) => m.eliminationRound === eliminationRound);
+      }
 
       return this.matchService.convertMatchesToResponseDtos(
         matches,
@@ -108,6 +118,10 @@ export class MatchController {
         matches = matches.filter((m) => m.status === status);
       }
 
+      if (eliminationRound) {
+        matches = matches.filter((m) => m.eliminationRound === eliminationRound);
+      }
+
       return this.matchService.convertMatchesToResponseDtos(
         matches,
         userTimezoneOffset,
@@ -119,8 +133,11 @@ export class MatchController {
       const matches = await this.matchService.getMatchesByStatus(
         status as MatchStatus,
       );
+      const filteredMatches = eliminationRound
+        ? matches.filter((m) => m.eliminationRound === eliminationRound)
+        : matches;
       return this.matchService.convertMatchesToResponseDtos(
-        matches,
+        filteredMatches,
         userTimezoneOffset,
       );
     }
@@ -134,10 +151,34 @@ export class MatchController {
     );
 
     const allMatches = [...groupMatches, ...eliminationMatches];
+    const filteredMatches = eliminationRound
+      ? allMatches.filter((m) => m.eliminationRound === eliminationRound)
+      : allMatches;
     return this.matchService.convertMatchesToResponseDtos(
-      allMatches,
+      filteredMatches,
       userTimezoneOffset,
     );
+  }
+
+  /**
+   * GET /api/matches/standings/group
+   * Get standings table for all groups or a specific group
+   */
+  @Get('standings/group')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
+  async getGroupStandings(@Query('group') group?: string) {
+    if (group && !/^[A-La-l]$/.test(group.trim())) {
+      throw new BadRequestException('Invalid group. Must be a letter between A and L');
+    }
+
+    const data = await this.matchService.getGroupStandings(group);
+
+    return {
+      data,
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   /**

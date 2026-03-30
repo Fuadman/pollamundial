@@ -75,8 +75,11 @@ export class MatchResponseDto {
   result?: {
     team1Score: number;
     team2Score: number;
+    team1PenaltyScore?: number | null;
+    team2PenaltyScore?: number | null;
     winner?: string | null;
     isDraw: boolean;
+    decidedByPenalties?: boolean;
     publishedTimestamp: Date;
   };
 }

@@ -35,7 +35,7 @@ export interface Team {
 
 export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'postponed';
 export type MatchPhase = 'group' | 'elimination';
-export type EliminationRound = 'R16' | 'QF' | 'SF' | 'THIRD' | 'FINAL';
+export type EliminationRound = 'R32' | 'R16' | 'QF' | 'SF' | 'THIRD' | 'FINAL';
 
 export interface TimeInfo {
   utcTime: string;
@@ -65,9 +65,31 @@ export interface MatchResult {
   matchId: string;
   team1Score: number;
   team2Score: number;
+  team1PenaltyScore?: number | null;
+  team2PenaltyScore?: number | null;
   winnerId: string | null;
   isDraw: boolean;
+  decidedByPenalties?: boolean;
   publishedTimestamp: string;
+}
+
+export interface GroupStandingRow {
+  position: number;
+  teamId: string;
+  team: string;
+  played: number;
+  won: number;
+  drawn: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+}
+
+export interface GroupStandings {
+  group: string;
+  standings: GroupStandingRow[];
 }
 
 // ─── Predictions ─────────────────────────────────────────────────────────────

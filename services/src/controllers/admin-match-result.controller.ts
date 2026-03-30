@@ -12,7 +12,6 @@ import {
 } from '@nestjs/common';
 import { MatchResultService } from '../services/match-result.service';
 import { PredictionService } from '../services/prediction.service';
-import { ScoringService } from '../services/scoring.service';
 import { ScoreUpdateService } from '../services/score-update.service';
 import { AdminService } from '../auth/services/admin.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -22,6 +21,8 @@ import { ScoreUpdateGateway } from '../gateways/score-update.gateway';
 export interface PublishResultDto {
   team1Score: number;
   team2Score: number;
+  team1PenaltyScore?: number;
+  team2PenaltyScore?: number;
 }
 
 export interface ResultResponse {
@@ -29,8 +30,11 @@ export interface ResultResponse {
   matchId: string;
   team1Score: number;
   team2Score: number;
+  team1PenaltyScore: number | null;
+  team2PenaltyScore: number | null;
   winnerId: string | null;
   isDraw: boolean;
+  decidedByPenalties: boolean;
   publishedTimestamp: Date;
 }
 
@@ -40,7 +44,6 @@ export class AdminMatchResultController {
   constructor(
     private matchResultService: MatchResultService,
     private predictionService: PredictionService,
-    private scoringService: ScoringService,
     private scoreUpdateService: ScoreUpdateService,
     private adminService: AdminService,
     private scoreUpdateGateway: ScoreUpdateGateway,
@@ -87,20 +90,12 @@ export class AdminMatchResultController {
       matchId,
       dto.team1Score,
       dto.team2Score,
+      dto.team1PenaltyScore,
+      dto.team2PenaltyScore,
       req.user.id,
     );
 
-    // Trigger automatic score calculation for all predictions
-    // Requirement 5.4: Trigger automatic score calculation
-    try {
-      await this.scoringService.calculateAllScoresForMatch(matchId);
-    } catch (error) {
-      // Log error but don't fail the result publication
-      console.error(
-        `Failed to calculate scores for match ${matchId}:`,
-        error,
-      );
-    }
+    // Side effects (scoring/bracket/socket) are handled automatically by MatchResultSubscriber.
 
     return this.mapResultToResponse(result);
   }
@@ -153,19 +148,12 @@ export class AdminMatchResultController {
       matchId,
       dto.team1Score,
       dto.team2Score,
+      dto.team1PenaltyScore,
+      dto.team2PenaltyScore,
       req.user.id,
     );
 
-    // Recalculate scores for all predictions
-    try {
-      await this.scoringService.recalculateScoresForMatch(matchId);
-    } catch (error) {
-      // Log error but don't fail the result update
-      console.error(
-        `Failed to recalculate scores for match ${matchId}:`,
-        error,
-      );
-    }
+    // Side effects (scoring/bracket/socket) are handled automatically by MatchResultSubscriber.
 
     return this.mapResultToResponse(result);
   }
@@ -210,6 +198,29 @@ export class AdminMatchResultController {
       scoreUpdate.team2Score,
       scoreUpdate.timestamp,
     );
+
+    const existingResult = await this.matchResultService.getResultByMatchId(matchId);
+
+    if (existingResult) {
+      await this.matchResultService.updateResult(
+        matchId,
+        dto.team1Score,
+        dto.team2Score,
+        dto.team1PenaltyScore,
+        dto.team2PenaltyScore,
+        req.user.id,
+      );
+    } else {
+      await this.matchResultService.publishResult(
+        matchId,
+        dto.team1Score,
+        dto.team2Score,
+        dto.team1PenaltyScore,
+        dto.team2PenaltyScore,
+        req.user.id,
+      );
+    }
+    // Side effects (scoring/bracket/socket) are handled automatically by MatchResultSubscriber.
 
     return {
       matchId,
@@ -279,8 +290,11 @@ export class AdminMatchResultController {
       matchId: result.matchId,
       team1Score: result.team1Score,
       team2Score: result.team2Score,
+      team1PenaltyScore: result.team1PenaltyScore,
+      team2PenaltyScore: result.team2PenaltyScore,
       winnerId: result.winnerId,
       isDraw: result.isDraw,
+      decidedByPenalties: result.decidedByPenalties,
       publishedTimestamp: result.publishedTimestamp,
     };
   }

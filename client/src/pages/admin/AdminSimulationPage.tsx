@@ -37,18 +37,22 @@ export function AdminSimulationPage() {
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
   const refreshSimulationViews = useCallback(async () => {
-    try {
-      const [leaderboardResponse, usersResponse, resultsResponse] = await Promise.all([
-        adminService.getSimulationLeaderboard(),
-        adminService.getSimulationUsers(),
-        adminService.getSimulationResults(),
-      ]);
+    const [leaderboardResponse, usersResponse, resultsResponse] = await Promise.allSettled([
+      adminService.getSimulationLeaderboard(),
+      adminService.getSimulationUsers(),
+      adminService.getSimulationResults(),
+    ]);
 
-      setLeaderboard(leaderboardResponse.data.leaderboard);
-      setFakeUsers(usersResponse.data.users);
-      setResults(resultsResponse.data.results);
-    } catch {
-      // Keep current UI data when refresh fails.
+    if (leaderboardResponse.status === 'fulfilled') {
+      setLeaderboard(leaderboardResponse.value.data.leaderboard);
+    }
+
+    if (usersResponse.status === 'fulfilled') {
+      setFakeUsers(usersResponse.value.data.users);
+    }
+
+    if (resultsResponse.status === 'fulfilled') {
+      setResults(resultsResponse.value.data.results);
     }
   }, []);
 
@@ -61,6 +65,10 @@ export function AdminSimulationPage() {
       await loadStatus();
       if (label === 'results') {
         await refreshSimulationViews();
+      }
+      if (label === 'recalculate') {
+        const leaderboardResponse = await adminService.getSimulationLeaderboard();
+        setLeaderboard(leaderboardResponse.data.leaderboard);
       }
     } catch (e: any) {
       setMessage({ type: 'error', text: e?.response?.data?.message || 'Error inesperado' });
@@ -210,6 +218,14 @@ export function AdminSimulationPage() {
           <Button
             variant="secondary"
             size="sm"
+            onClick={() => run('recalculate', () => adminService.recalculatePositions())}
+            disabled={!!loading || (status?.fakePredictions ?? 0) === 0}
+          >
+            {loading === 'recalculate' ? 'Recalculando…' : 'Recalcular posiciones'}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={handleLoadFakeUsers}
             disabled={!!loading || (status?.fakeUsers ?? 0) === 0}
           >
@@ -253,6 +269,32 @@ export function AdminSimulationPage() {
             disabled={!!loading || (status?.fakeUsers ?? 0) === 0}
           >
             {loading === 'clear' ? 'Limpiando…' : 'Limpiar'}
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <Badge variant="red">6</Badge>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-gray-800">Resetear todos los datos</p>
+            <p className="text-xs text-red-600">
+              Resetea predicciones, resultados y scores. Tambien borra equipos, partidos, noticias y usuarios, solo quedará el admin fuadsalo@gmail.com
+            </p>
+          </div>
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => {
+              if (!confirm('Esto eliminará todos los datos y usuarios excepto fuadsalo@gmail.com. ¿Continuar?')) {
+                return;
+              }
+              run('reset-all', () => adminService.resetAllData());
+              setLeaderboard([]);
+              setFakeUsers([]);
+              setResults([]);
+            }}
+            disabled={!!loading}
+          >
+            {loading === 'reset-all' ? 'Reseteando…' : 'Reset total'}
           </Button>
         </div>
       </div>

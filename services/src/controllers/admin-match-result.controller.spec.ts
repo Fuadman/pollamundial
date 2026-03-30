@@ -1,16 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AdminMatchResultController } from './admin-match-result.controller';
 import { MatchResultService } from '../services/match-result.service';
-import { ScoringService } from '../services/scoring.service';
 import { ScoreUpdateService } from '../services/score-update.service';
 import { AdminService } from '../auth/services/admin.service';
 import { ScoreUpdateGateway } from '../gateways/score-update.gateway';
+import { PredictionService } from '../services/prediction.service';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 describe('AdminMatchResultController', () => {
   let controller: AdminMatchResultController;
   let matchResultService: MatchResultService;
-  let scoringService: ScoringService;
   let scoreUpdateService: ScoreUpdateService;
   let adminService: AdminService;
   let scoreUpdateGateway: ScoreUpdateGateway;
@@ -33,10 +32,10 @@ describe('AdminMatchResultController', () => {
           },
         },
         {
-          provide: ScoringService,
+          provide: PredictionService,
           useValue: {
-            calculateAllScoresForMatch: jest.fn(),
-            recalculateScoresForMatch: jest.fn(),
+            blockPredictionsForMatch: jest.fn(),
+            unblockPredictionsForMatch: jest.fn(),
           },
         },
         {
@@ -56,6 +55,7 @@ describe('AdminMatchResultController', () => {
           provide: ScoreUpdateGateway,
           useValue: {
             broadcastScoreUpdate: jest.fn(),
+            broadcastMatchResult: jest.fn(),
             getConnectedClientsCount: jest.fn(),
           },
         },
@@ -66,7 +66,6 @@ describe('AdminMatchResultController', () => {
       AdminMatchResultController,
     );
     matchResultService = module.get<MatchResultService>(MatchResultService);
-    scoringService = module.get<ScoringService>(ScoringService);
     scoreUpdateService = module.get<ScoreUpdateService>(ScoreUpdateService);
     adminService = module.get<AdminService>(AdminService);
     scoreUpdateGateway = module.get<ScoreUpdateGateway>(ScoreUpdateGateway);
@@ -109,7 +108,7 @@ describe('AdminMatchResultController', () => {
   });
 
   describe('publishResult', () => {
-    it('should publish result and trigger score calculation', async () => {
+    it('should publish result', async () => {
       const matchId = 'match-123';
       const dto = { team1Score: 2, team2Score: 1 };
       const publishedResult = {
@@ -128,10 +127,6 @@ describe('AdminMatchResultController', () => {
       jest
         .spyOn(matchResultService, 'publishResult')
         .mockResolvedValue(publishedResult as any);
-      jest
-        .spyOn(scoringService, 'calculateAllScoresForMatch')
-        .mockResolvedValue(5);
-
       const result = await controller.publishResult(matchId, dto, mockRequest);
 
       expect(result).toBeDefined();
@@ -141,10 +136,9 @@ describe('AdminMatchResultController', () => {
         matchId,
         2,
         1,
+        undefined,
+        undefined,
         mockRequest.user.id,
-      );
-      expect(scoringService.calculateAllScoresForMatch).toHaveBeenCalledWith(
-        matchId,
       );
     });
 
@@ -161,7 +155,7 @@ describe('AdminMatchResultController', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('should handle score calculation errors gracefully', async () => {
+    it('should return published result when subscriber side effects are async', async () => {
       const matchId = 'match-123';
       const dto = { team1Score: 2, team2Score: 1 };
       const publishedResult = {
@@ -180,11 +174,6 @@ describe('AdminMatchResultController', () => {
       jest
         .spyOn(matchResultService, 'publishResult')
         .mockResolvedValue(publishedResult as any);
-      jest
-        .spyOn(scoringService, 'calculateAllScoresForMatch')
-        .mockRejectedValue(new Error('Scoring failed'));
-
-      // Should not throw, just log error
       const result = await controller.publishResult(matchId, dto, mockRequest);
 
       expect(result).toBeDefined();
@@ -243,7 +232,7 @@ describe('AdminMatchResultController', () => {
   });
 
   describe('editResult', () => {
-    it('should edit result and recalculate scores', async () => {
+    it('should edit result', async () => {
       const matchId = 'match-123';
       const dto = { team1Score: 3, team2Score: 0 };
       const updatedResult = {
@@ -262,10 +251,6 @@ describe('AdminMatchResultController', () => {
       jest
         .spyOn(matchResultService, 'updateResult')
         .mockResolvedValue(updatedResult as any);
-      jest
-        .spyOn(scoringService, 'recalculateScoresForMatch')
-        .mockResolvedValue(5);
-
       const result = await controller.editResult(matchId, dto, mockRequest);
 
       expect(result).toBeDefined();
@@ -275,10 +260,9 @@ describe('AdminMatchResultController', () => {
         matchId,
         3,
         0,
+        undefined,
+        undefined,
         mockRequest.user.id,
-      );
-      expect(scoringService.recalculateScoresForMatch).toHaveBeenCalledWith(
-        matchId,
       );
     });
 
@@ -295,7 +279,7 @@ describe('AdminMatchResultController', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('should handle recalculation errors gracefully', async () => {
+    it('should return edited result when subscriber side effects are async', async () => {
       const matchId = 'match-123';
       const dto = { team1Score: 3, team2Score: 0 };
       const updatedResult = {
@@ -314,11 +298,6 @@ describe('AdminMatchResultController', () => {
       jest
         .spyOn(matchResultService, 'updateResult')
         .mockResolvedValue(updatedResult as any);
-      jest
-        .spyOn(scoringService, 'recalculateScoresForMatch')
-        .mockRejectedValue(new Error('Recalculation failed'));
-
-      // Should not throw, just log error
       const result = await controller.editResult(matchId, dto, mockRequest);
 
       expect(result).toBeDefined();
@@ -326,7 +305,7 @@ describe('AdminMatchResultController', () => {
   });
 
   describe('ingestScoreUpdate', () => {
-    it('should ingest score update and broadcast to clients', async () => {
+    it('should ingest score update, auto-publish result and broadcast score update', async () => {
       const matchId = 'match-123';
       const dto = { team1Score: 2, team2Score: 1 };
       const scoreUpdate = {
@@ -343,7 +322,16 @@ describe('AdminMatchResultController', () => {
         .spyOn(scoreUpdateService, 'ingestScoreUpdate')
         .mockResolvedValue(scoreUpdate);
       jest
+        .spyOn(matchResultService, 'getResultByMatchId')
+        .mockResolvedValue(null);
+      jest
+        .spyOn(matchResultService, 'publishResult')
+        .mockResolvedValue({ id: 'result-1' } as any);
+      jest
         .spyOn(scoreUpdateGateway, 'broadcastScoreUpdate')
+        .mockReturnValue(undefined);
+      jest
+        .spyOn(scoreUpdateGateway, 'broadcastMatchResult')
         .mockReturnValue(undefined);
       jest
         .spyOn(scoreUpdateGateway, 'getConnectedClientsCount')
@@ -361,6 +349,60 @@ describe('AdminMatchResultController', () => {
         1,
       );
       expect(scoreUpdateGateway.broadcastScoreUpdate).toHaveBeenCalled();
+      expect(matchResultService.publishResult).toHaveBeenCalledWith(
+        matchId,
+        2,
+        1,
+        undefined,
+        undefined,
+        mockRequest.user.id,
+      );
+      expect(scoreUpdateGateway.broadcastMatchResult).not.toHaveBeenCalled();
+    });
+
+    it('should ingest score update and auto-update existing result', async () => {
+      const matchId = 'match-123';
+      const dto = { team1Score: 2, team2Score: 1 };
+      const scoreUpdate = {
+        matchId,
+        team1Score: 2,
+        team2Score: 1,
+        timestamp: new Date(),
+      };
+
+      jest
+        .spyOn(adminService, 'enforceAdminAccess')
+        .mockResolvedValue({ role: 'admin' } as any);
+      jest
+        .spyOn(scoreUpdateService, 'ingestScoreUpdate')
+        .mockResolvedValue(scoreUpdate);
+      jest
+        .spyOn(matchResultService, 'getResultByMatchId')
+        .mockResolvedValue({ id: 'result-123' } as any);
+      jest
+        .spyOn(matchResultService, 'updateResult')
+        .mockResolvedValue({ id: 'result-123' } as any);
+      jest
+        .spyOn(scoreUpdateGateway, 'broadcastScoreUpdate')
+        .mockReturnValue(undefined);
+      jest
+        .spyOn(scoreUpdateGateway, 'broadcastMatchResult')
+        .mockReturnValue(undefined);
+      jest
+        .spyOn(scoreUpdateGateway, 'getConnectedClientsCount')
+        .mockReturnValue(2);
+
+      await controller.ingestScoreUpdate(matchId, dto, mockRequest);
+
+      expect(matchResultService.updateResult).toHaveBeenCalledWith(
+        matchId,
+        2,
+        1,
+        undefined,
+        undefined,
+        mockRequest.user.id,
+      );
+      expect(scoreUpdateGateway.broadcastMatchResult).not.toHaveBeenCalled();
     });
 
     it('should validate score format for score update', async () => {

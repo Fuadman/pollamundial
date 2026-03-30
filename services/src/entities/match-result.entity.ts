@@ -32,6 +32,15 @@ export class MatchResult {
   @Column('int')
   team2Score!: number;
 
+  @Column('int', { nullable: true })
+  team1PenaltyScore!: number | null;
+
+  @Column('int', { nullable: true })
+  team2PenaltyScore!: number | null;
+
+  @Column('boolean', { default: false })
+  decidedByPenalties!: boolean;
+
   @Column('uuid', { nullable: true })
   winnerId!: string | null;
 

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { MatchService } from './match.service';
 import { MatchRepository } from '../repositories/match.repository';
 import { TeamRepository } from '../repositories/team.repository';
+import { MatchResultRepository } from '../repositories/match-result.repository';
 import { TimezoneService } from './timezone.service';
 import { Match, MatchStatus, MatchPhase } from '../entities/match.entity';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
@@ -37,6 +38,7 @@ describe('MatchService', () => {
     eliminationRound: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+    predictionsBlocked: false,
     predictions: [],
     result: null,
   };
@@ -72,6 +74,14 @@ describe('MatchService', () => {
           provide: TeamRepository,
           useValue: {
             findOne: jest.fn(),
+          },
+        },
+        {
+          provide: MatchResultRepository,
+          useValue: {
+            find: jest.fn(),
+            findByMatchId: jest.fn(),
+            findByMatchIds: jest.fn().mockResolvedValue([]),
           },
         },
         {

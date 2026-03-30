@@ -4,7 +4,7 @@ import { MatchResultRepository } from '../repositories/match-result.repository';
 import { MatchRepository } from '../repositories/match.repository';
 import { TeamRepository } from '../repositories/team.repository';
 import { MatchResult } from '../entities/match-result.entity';
-import { MatchStatus } from '../entities/match.entity';
+import { MatchStatus, MatchPhase } from '../entities/match.entity';
 import { v4 as uuid } from 'uuid';
 
 export interface ResultPublicationAudit {
@@ -40,6 +40,92 @@ export class MatchResultService {
     }
   }
 
+  private validatePenaltyFormat(
+    team1PenaltyScore?: number,
+    team2PenaltyScore?: number,
+  ): void {
+    if (team1PenaltyScore === undefined && team2PenaltyScore === undefined) {
+      return;
+    }
+
+    if (
+      !Number.isInteger(team1PenaltyScore) ||
+      !Number.isInteger(team2PenaltyScore)
+    ) {
+      throw new BadRequestException('Penalty scores must be integers');
+    }
+
+    if ((team1PenaltyScore as number) < 0 || (team2PenaltyScore as number) < 0) {
+      throw new BadRequestException('Penalty scores cannot be negative');
+    }
+  }
+
+  private resolveWinnerData(
+    match: { team1Id: string; team2Id: string; phase: MatchPhase },
+    team1Score: number,
+    team2Score: number,
+    team1PenaltyScore?: number,
+    team2PenaltyScore?: number,
+  ): {
+    winnerId: string | null;
+    isDraw: boolean;
+    decidedByPenalties: boolean;
+    normalizedTeam1PenaltyScore: number | null;
+    normalizedTeam2PenaltyScore: number | null;
+  } {
+    const isDraw = team1Score === team2Score;
+
+    if (!isDraw) {
+      if (team1PenaltyScore !== undefined || team2PenaltyScore !== undefined) {
+        throw new BadRequestException(
+          'Penalty scores are only allowed when regular time ends in draw',
+        );
+      }
+
+      return {
+        winnerId: team1Score > team2Score ? match.team1Id : match.team2Id,
+        isDraw: false,
+        decidedByPenalties: false,
+        normalizedTeam1PenaltyScore: null,
+        normalizedTeam2PenaltyScore: null,
+      };
+    }
+
+    if (match.phase === MatchPhase.GROUP) {
+      if (team1PenaltyScore !== undefined || team2PenaltyScore !== undefined) {
+        throw new BadRequestException(
+          'Penalty scores are not allowed in group stage matches',
+        );
+      }
+
+      return {
+        winnerId: null,
+        isDraw: true,
+        decidedByPenalties: false,
+        normalizedTeam1PenaltyScore: null,
+        normalizedTeam2PenaltyScore: null,
+      };
+    }
+
+    if (team1PenaltyScore === undefined || team2PenaltyScore === undefined) {
+      throw new BadRequestException(
+        'Penalty scores are required for drawn elimination matches',
+      );
+    }
+
+    if (team1PenaltyScore === team2PenaltyScore) {
+      throw new BadRequestException('Penalty scores cannot end in draw');
+    }
+
+    return {
+      winnerId: team1PenaltyScore > team2PenaltyScore ? match.team1Id : match.team2Id,
+      isDraw: true,
+      decidedByPenalties: true,
+      normalizedTeam1PenaltyScore: team1PenaltyScore,
+      normalizedTeam2PenaltyScore: team2PenaltyScore,
+    };
+  }
+
   /**
    * Publish match result with validation and audit trail
    * Requirement 5.1-5.7: Admin can publish results within 5 minutes of match completion
@@ -53,6 +139,8 @@ export class MatchResultService {
     matchId: string,
     team1Score: number,
     team2Score: number,
+    team1PenaltyScore?: number,
+    team2PenaltyScore?: number,
     publishedBy?: string,
   ): Promise<MatchResult> {
     // Validate match exists
@@ -63,6 +151,7 @@ export class MatchResultService {
 
     // Validate score format
     this.validateScoreFormat(team1Score, team2Score);
+    this.validatePenaltyFormat(team1PenaltyScore, team2PenaltyScore);
 
     // Check if result already exists (duplicate prevention)
     const existingResult = await this.matchResultRepository.findByMatchId(matchId);
@@ -72,22 +161,24 @@ export class MatchResultService {
       );
     }
 
-    // Determine winner
-    let winnerId: string | null = null;
-    const isDraw = team1Score === team2Score;
-
-    if (!isDraw) {
-      winnerId =
-        team1Score > team2Score ? match.team1Id : match.team2Id;
-    }
+    const winnerData = this.resolveWinnerData(
+      match as { team1Id: string; team2Id: string; phase: MatchPhase },
+      team1Score,
+      team2Score,
+      team1PenaltyScore,
+      team2PenaltyScore,
+    );
 
     const result = this.matchResultRepository.create({
       id: uuid(),
       matchId,
       team1Score,
       team2Score,
-      winnerId,
-      isDraw,
+      team1PenaltyScore: winnerData.normalizedTeam1PenaltyScore,
+      team2PenaltyScore: winnerData.normalizedTeam2PenaltyScore,
+      winnerId: winnerData.winnerId,
+      isDraw: winnerData.isDraw,
+      decidedByPenalties: winnerData.decidedByPenalties,
       publishedTimestamp: new Date(),
     });
 
@@ -159,6 +250,8 @@ export class MatchResultService {
     matchId: string,
     team1Score: number,
     team2Score: number,
+    team1PenaltyScore?: number,
+    team2PenaltyScore?: number,
     editedBy?: string,
   ): Promise<MatchResult> {
     const result = await this.getResultByMatchId(matchId);
@@ -168,6 +261,7 @@ export class MatchResultService {
 
     // Validate score format
     this.validateScoreFormat(team1Score, team2Score);
+    this.validatePenaltyFormat(team1PenaltyScore, team2PenaltyScore);
 
     // Store previous scores for audit trail
     const previousScores = {
@@ -175,22 +269,26 @@ export class MatchResultService {
       team2Score: result.team2Score,
     };
 
-    // Determine new winner
-    let winnerId: string | null = null;
-    const isDraw = team1Score === team2Score;
-
-    if (!isDraw) {
-      const match = await this.matchRepository.findOne({ where: { id: matchId } });
-      if (!match) {
-        throw new NotFoundException(`Match with ID ${matchId} not found`);
-      }
-      winnerId = team1Score > team2Score ? match.team1Id : match.team2Id;
+    const match = await this.matchRepository.findOne({ where: { id: matchId } });
+    if (!match) {
+      throw new NotFoundException(`Match with ID ${matchId} not found`);
     }
+
+    const winnerData = this.resolveWinnerData(
+      match as { team1Id: string; team2Id: string; phase: MatchPhase },
+      team1Score,
+      team2Score,
+      team1PenaltyScore,
+      team2PenaltyScore,
+    );
 
     result.team1Score = team1Score;
     result.team2Score = team2Score;
-    result.winnerId = winnerId;
-    result.isDraw = isDraw;
+    result.team1PenaltyScore = winnerData.normalizedTeam1PenaltyScore;
+    result.team2PenaltyScore = winnerData.normalizedTeam2PenaltyScore;
+    result.winnerId = winnerData.winnerId;
+    result.isDraw = winnerData.isDraw;
+    result.decidedByPenalties = winnerData.decidedByPenalties;
 
     const updatedResult = await this.matchResultRepository.save(result);
 
@@ -227,12 +325,16 @@ export class MatchResultService {
   }
 
   /**
-   * Get pending results (completed matches without published results)
-   * Requirement 5.2, 26.1: Display list of completed matches awaiting result entry
+   * Get all matches for admin result management.
+   * Includes matches with and without published results so admins can publish or edit anytime.
    */
   async getPendingResults(): Promise<any[]> {
-    const completedMatches = await this.matchRepository.findCompletedWithoutResult();
-    return completedMatches.map((match) => ({
+    const matches = await this.matchRepository.find({
+      relations: ['team1', 'team2', 'result'],
+      order: { scheduledTime: 'ASC' },
+    });
+
+    return matches.map((match) => ({
       matchId: match.id,
       team1: match.team1,
       team2: match.team2,
@@ -242,6 +344,16 @@ export class MatchResultService {
       phase: match.phase,
       group: match.groupStageGroup,
       eliminationRound: match.eliminationRound,
+      result: match.result
+        ? {
+            id: match.result.id,
+            team1Score: match.result.team1Score,
+            team2Score: match.result.team2Score,
+            team1PenaltyScore: match.result.team1PenaltyScore,
+            team2PenaltyScore: match.result.team2PenaltyScore,
+            publishedTimestamp: match.result.publishedTimestamp,
+          }
+        : null,
     }));
   }
 

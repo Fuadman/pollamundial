@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { MatchResult } from '../entities/match-result.entity';
 
 @Injectable()
@@ -16,8 +16,12 @@ export class MatchResultRepository extends Repository<MatchResult> {
   }
 
   async findByMatchIds(matchIds: string[]): Promise<MatchResult[]> {
+    if (matchIds.length === 0) {
+      return [];
+    }
+
     return this.find({
-      where: { matchId: matchIds as any },
+      where: { matchId: In(matchIds) },
       relations: ['match', 'winner'],
     });
   }

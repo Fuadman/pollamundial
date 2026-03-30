@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { UserScore } from '../entities/user-score.entity';
+import { User } from '../entities/user.entity';
 
 @Injectable()
 export class UserScoreRepository extends Repository<UserScore> {
@@ -9,34 +10,34 @@ export class UserScoreRepository extends Repository<UserScore> {
   }
 
   async findByUserId(userId: string): Promise<UserScore | null> {
-    return this.findOne({
-      where: { userId },
-      relations: ['user'],
-    });
+    return this.createQueryBuilder('score')
+      .leftJoinAndMapOne('score.user', User, 'user', 'user.id = score.userId')
+      .where('score.userId = :userId', { userId })
+      .getOne();
   }
 
   async findTopScores(limit: number = 100): Promise<UserScore[]> {
-    return this.find({
-      relations: ['user'],
-      order: { totalPoints: 'DESC' },
-      take: limit,
-    });
+    return this.createQueryBuilder('score')
+      .leftJoinAndMapOne('score.user', User, 'user', 'user.id = score.userId')
+      .orderBy('score.totalPoints', 'DESC')
+      .take(limit)
+      .getMany();
   }
 
   async findTopGroupStageScores(limit: number = 100): Promise<UserScore[]> {
-    return this.find({
-      relations: ['user'],
-      order: { groupStagePoints: 'DESC' },
-      take: limit,
-    });
+    return this.createQueryBuilder('score')
+      .leftJoinAndMapOne('score.user', User, 'user', 'user.id = score.userId')
+      .orderBy('score.groupStagePoints', 'DESC')
+      .take(limit)
+      .getMany();
   }
 
   async findTopEliminationScores(limit: number = 100): Promise<UserScore[]> {
-    return this.find({
-      relations: ['user'],
-      order: { eliminationPoints: 'DESC' },
-      take: limit,
-    });
+    return this.createQueryBuilder('score')
+      .leftJoinAndMapOne('score.user', User, 'user', 'user.id = score.userId')
+      .orderBy('score.eliminationPoints', 'DESC')
+      .take(limit)
+      .getMany();
   }
 
   async incrementTotalPoints(userId: string, points: number): Promise<void> {
@@ -135,7 +136,7 @@ export class UserScoreRepository extends Repository<UserScore> {
     const skip = (page - 1) * limit;
 
     const [rows, total] = await this.createQueryBuilder('score')
-      .leftJoinAndSelect('score.user', 'user')
+      .leftJoinAndMapOne('score.user', User, 'user', 'user.id = score.userId')
       .orderBy(orderColumn, 'DESC')
       .addOrderBy('score.updatedAt', 'ASC')
       .skip(skip)

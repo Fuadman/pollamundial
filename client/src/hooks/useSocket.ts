@@ -2,9 +2,14 @@ import { useEffect, useRef } from 'react';
 import type { Socket } from 'socket.io-client';
 import { getSocket, disconnectSocket, SocketEvents } from '../services/socket.service';
 import { useAppDispatch, useAppSelector } from '../app/hooks';
-import { updateMatchInList } from '../features/matches/matchesSlice';
-import { updateEntries } from '../features/leaderboard/leaderboardSlice';
+import {
+  fetchMatch,
+  fetchMatches,
+  updateMatchInList,
+} from '../features/matches/matchesSlice';
+import { fetchLeaderboard, updateEntries } from '../features/leaderboard/leaderboardSlice';
 import { addNotification, setSimulationMode } from '../features/ui/uiSlice';
+import { fetchUserPredictions } from '../features/predictions/predictionsSlice';
 
 /**
  * Initializes the Socket.io connection and registers all global event listeners.
@@ -13,6 +18,10 @@ import { addNotification, setSimulationMode } from '../features/ui/uiSlice';
 export function useSocket() {
   const dispatch = useAppDispatch();
   const token = useAppSelector((s) => s.auth.token);
+  const userId = useAppSelector((s) => s.auth.user?.id);
+  const leaderboardPhase = useAppSelector((s) => s.leaderboard.phase);
+  const leaderboardPage = useAppSelector((s) => s.leaderboard.page);
+  const matchFilters = useAppSelector((s) => s.matches.filters);
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
@@ -21,16 +30,29 @@ export function useSocket() {
     const socket = getSocket(token);
     socketRef.current = socket;
 
-    socket.on(SocketEvents.SCORE_UPDATE, (data: { match: unknown }) => {
+    socket.on(SocketEvents.SCORE_UPDATE, (data: { match?: unknown; matchId?: string }) => {
       if (data.match) {
         dispatch(updateMatchInList(data.match as Parameters<typeof updateMatchInList>[0]));
+      } else if (data.matchId) {
+        dispatch(fetchMatch(data.matchId));
       }
     });
 
-    socket.on(SocketEvents.MATCH_RESULT, (data: { match: unknown; message?: string }) => {
+    socket.on(SocketEvents.MATCH_RESULT, (data: { match?: unknown; matchId?: string; message?: string }) => {
       if (data.match) {
         dispatch(updateMatchInList(data.match as Parameters<typeof updateMatchInList>[0]));
       }
+
+      if (data.matchId) {
+        dispatch(fetchMatch(data.matchId));
+        if (userId) {
+          dispatch(fetchUserPredictions(userId));
+        }
+      }
+
+      // Pull fresh list so auto-generated elimination matches become visible immediately.
+      dispatch(fetchMatches(matchFilters));
+
       dispatch(addNotification({
         type: 'info',
         message: data.message ?? '⚽ Resultado publicado',
@@ -41,6 +63,9 @@ export function useSocket() {
       if (data.entries) {
         dispatch(updateEntries(data.entries as Parameters<typeof updateEntries>[0]));
       }
+
+      // Pull authoritative ranking for current phase/page so UI stays in sync.
+      dispatch(fetchLeaderboard({ phase: leaderboardPhase, page: leaderboardPage }));
     });
 
     socket.on(SocketEvents.LOCKDOWN, (data: { matchId: string; message?: string }) => {
@@ -61,7 +86,7 @@ export function useSocket() {
       socket.off(SocketEvents.LOCKDOWN);
       socket.off('simulation-mode');
     };
-  }, [token, dispatch]);
+  }, [token, userId, leaderboardPhase, leaderboardPage, matchFilters, dispatch]);
 
   // Disconnect on logout
   useEffect(() => {

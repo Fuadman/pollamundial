@@ -80,6 +80,16 @@ export class MatchRepository extends Repository<Match> {
       .getMany();
   }
 
+  async findWithoutResult(): Promise<Match[]> {
+    return this.createQueryBuilder('match')
+      .leftJoinAndSelect('match.result', 'result')
+      .leftJoinAndSelect('match.team1', 'team1')
+      .leftJoinAndSelect('match.team2', 'team2')
+      .where('result.id IS NULL')
+      .orderBy('match.scheduledTime', 'ASC')
+      .getMany();
+  }
+
   async findMatchesNearLockdown(minutesBefore: number): Promise<Match[]> {
     const now = new Date();
     const futureTime = new Date(now.getTime() + minutesBefore * 60 * 1000);

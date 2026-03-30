@@ -242,6 +242,33 @@ export class ScoringService {
     try {
       // Reset points for all predictions
       for (const prediction of predictions) {
+        const previousPoints = prediction.pointsEarned ?? 0;
+
+        if (previousPoints > 0) {
+          await queryRunner.manager.decrement(
+            'user_scores',
+            { userId: prediction.userId },
+            'totalPoints',
+            previousPoints,
+          );
+
+          if (prediction.match?.phase === MatchPhase.GROUP) {
+            await queryRunner.manager.decrement(
+              'user_scores',
+              { userId: prediction.userId },
+              'groupStagePoints',
+              previousPoints,
+            );
+          } else {
+            await queryRunner.manager.decrement(
+              'user_scores',
+              { userId: prediction.userId },
+              'eliminationPoints',
+              previousPoints,
+            );
+          }
+        }
+
         await queryRunner.manager.update(
           Prediction,
           { id: prediction.id },

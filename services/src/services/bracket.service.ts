@@ -5,38 +5,450 @@ import {
 } from '@nestjs/common';
 import { MatchService } from './match.service';
 import { TeamRepository } from '../repositories/team.repository';
+import { MatchRepository } from '../repositories/match.repository';
+import { MatchResultRepository } from '../repositories/match-result.repository';
 import { Team } from '../entities/team.entity';
 import { Match, MatchPhase } from '../entities/match.entity';
 
-/**
- * BracketService handles dynamic elimination phase bracket configuration
- * Supports Round of 16, Quarterfinals, Semifinals, and Final matches
- */
+interface RankedTeam {
+  group: string;
+  position: number;
+  teamId: string;
+  team: string;
+  points: number;
+  goalDifference: number;
+  goalsFor: number;
+}
+
+interface Round32Template {
+  matchNumber: number;
+  scheduledTime: string;
+  team1: { type: 'group'; position: 1 | 2; group: string };
+  team2:
+    | { type: 'group'; position: 1 | 2; group: string }
+    | { type: 'third'; allowedGroups: string[] };
+}
+
+interface ThirdSlot {
+  matchNumber: number;
+  allowedGroups: string[];
+}
+
 @Injectable()
 export class BracketService {
   constructor(
     private matchService: MatchService,
     private teamRepository: TeamRepository,
+    private matchRepository: MatchRepository,
+    private matchResultRepository: MatchResultRepository,
   ) {}
 
-  /**
-   * Configure Round of 16 bracket with 16 qualified teams
-   * Generates 16 matches scheduled for July 1-6, 2026
-   *
-   * @param teams - Array of 16 qualified teams from group stage
-   * @returns Array of 16 generated Round of 16 matches
-   * @throws BadRequestException if validation fails
-   */
+  async autoAdvanceFromMatch(matchId: string): Promise<void> {
+    const match = await this.matchRepository.findOne({
+      where: { id: matchId },
+      relations: ['result'],
+    });
+
+    if (!match?.result) return;
+
+    if (match.phase === MatchPhase.GROUP) {
+      await this.tryGenerateNextPhase(() => this.generateRound32FromGroupStage());
+      return;
+    }
+
+    if (match.phase !== MatchPhase.ELIMINATION || !match.eliminationRound) {
+      return;
+    }
+
+    if (match.eliminationRound === 'R32') {
+      await this.tryGenerateNextPhase(() => this.generateRound16FromRound32());
+      return;
+    }
+
+    if (match.eliminationRound === 'R16') {
+      await this.tryGenerateNextPhase(() => this.generateQuarterfinalsFromRound16());
+      return;
+    }
+
+    if (match.eliminationRound === 'QF') {
+      await this.tryGenerateNextPhase(() => this.generateSemifinalsFromQuarterfinals());
+      return;
+    }
+
+    if (match.eliminationRound === 'SF') {
+      await this.tryGenerateNextPhase(() => this.generateFinalAndThirdFromSemifinals());
+    }
+  }
+
+  async getPhaseEditReadiness(): Promise<{
+    round32AutoEnabled: boolean;
+    round16Editable: boolean;
+    quarterfinalsEditable: boolean;
+    semifinalsEditable: boolean;
+  }> {
+    return {
+      round32AutoEnabled: await this.isGroupPhaseComplete(),
+      round16Editable: await this.isEliminationRoundComplete('R32', 16),
+      quarterfinalsEditable: await this.isEliminationRoundComplete('R16', 8),
+      semifinalsEditable: await this.isEliminationRoundComplete('QF', 4),
+    };
+  }
+
+  async generateRound32FromGroupStage(): Promise<Match[]> {
+    const templates = this.getRound32Templates();
+
+    const existingRound32 = await this.matchRepository.findByEliminationRound('R32');
+    if (existingRound32.length > 0) {
+      return existingRound32;
+    }
+
+    const groupMatches = await this.matchRepository.findByPhase(MatchPhase.GROUP);
+    const groupMatchIds = new Set(groupMatches.map((match) => match.id));
+    const groupResults = (await this.matchResultRepository.find()).filter((result) =>
+      groupMatchIds.has(result.matchId),
+    );
+
+    if (groupResults.length !== groupMatches.length) {
+      throw new BadRequestException(
+        'Group stage must be fully completed before generating Round of 32',
+      );
+    }
+
+    const standings = await this.matchService.getGroupStandings();
+    if (standings.length !== 12) {
+      throw new BadRequestException('Expected 12 groups to generate Round of 32');
+    }
+
+    const rankedByGroup = new Map<string, RankedTeam[]>();
+    for (const groupTable of standings) {
+      if (groupTable.standings.length !== 4) {
+        throw new BadRequestException(
+          `Group ${groupTable.group} must have 4 teams to generate Round of 32`,
+        );
+      }
+
+      const ranked = groupTable.standings.map((row) => ({
+        group: groupTable.group,
+        position: row.position,
+        teamId: row.teamId,
+        team: row.team,
+        points: row.points,
+        goalDifference: row.goalDifference,
+        goalsFor: row.goalsFor,
+      }));
+
+      const allPlayed = groupTable.standings.every((row) => row.played === 3);
+      if (!allPlayed) {
+        throw new BadRequestException(
+          `Group ${groupTable.group} is not complete. All teams must have played 3 matches`,
+        );
+      }
+
+      rankedByGroup.set(groupTable.group, ranked);
+    }
+
+    const thirdPlaces = Array.from(rankedByGroup.values())
+      .map((rows) => rows.find((row) => row.position === 3))
+      .filter((row): row is RankedTeam => !!row)
+      .sort(
+        (a, b) =>
+          b.points - a.points ||
+          b.goalDifference - a.goalDifference ||
+          b.goalsFor - a.goalsFor ||
+          a.team.localeCompare(b.team),
+      );
+
+    const qualifiedThirds = thirdPlaces.slice(0, 8);
+    if (qualifiedThirds.length !== 8) {
+      throw new BadRequestException('Could not determine 8 best third-placed teams');
+    }
+
+    const thirdSlots: ThirdSlot[] = [];
+    for (const template of templates) {
+      if (template.team2.type === 'third') {
+        thirdSlots.push({
+          matchNumber: template.matchNumber,
+          allowedGroups: template.team2.allowedGroups,
+        });
+      }
+    }
+
+    const thirdAssignments = this.assignThirdTeamsToSlots(qualifiedThirds, thirdSlots);
+
+    const requiredTeamIds = new Set<string>();
+
+    for (const template of templates) {
+      const team1 = rankedByGroup
+        .get(template.team1.group)
+        ?.find((row) => row.position === template.team1.position);
+      if (!team1) {
+        throw new NotFoundException(
+          `Could not resolve position ${template.team1.position} in group ${template.team1.group}`,
+        );
+      }
+      requiredTeamIds.add(team1.teamId);
+
+      if (template.team2.type === 'group') {
+        const team2Ref = template.team2;
+        const team2 = rankedByGroup
+          .get(team2Ref.group)
+          ?.find((row) => row.position === team2Ref.position);
+        if (!team2) {
+          throw new NotFoundException(
+            `Could not resolve position ${team2Ref.position} in group ${team2Ref.group}`,
+          );
+        }
+        requiredTeamIds.add(team2.teamId);
+      } else {
+        const assignedThird = thirdAssignments.get(template.matchNumber);
+        if (!assignedThird) {
+          throw new BadRequestException(
+            `Could not assign a third-placed team for match ${template.matchNumber}`,
+          );
+        }
+        requiredTeamIds.add(assignedThird.teamId);
+      }
+    }
+
+    const teams = await this.teamRepository.findByIds(Array.from(requiredTeamIds));
+    const teamById = new Map(teams.map((team) => [team.id, team]));
+
+    const generated: Match[] = [];
+
+    for (const template of templates) {
+      const team1Rank = rankedByGroup
+        .get(template.team1.group)
+        ?.find((row) => row.position === template.team1.position);
+      if (!team1Rank) continue;
+
+      let team2Id: string;
+      if (template.team2.type === 'group') {
+        const team2Ref = template.team2;
+        const team2Rank = rankedByGroup
+          .get(team2Ref.group)
+          ?.find((row) => row.position === team2Ref.position);
+        if (!team2Rank) continue;
+        team2Id = team2Rank.teamId;
+      } else {
+        const assignedThird = thirdAssignments.get(template.matchNumber);
+        if (!assignedThird) continue;
+        team2Id = assignedThird.teamId;
+      }
+
+      const team1 = teamById.get(team1Rank.teamId);
+      const team2 = teamById.get(team2Id);
+
+      if (!team1 || !team2) {
+        throw new NotFoundException('One or more qualified teams were not found');
+      }
+
+      const match = await this.matchService.createMatch(
+        team1.id,
+        team2.id,
+        new Date(template.scheduledTime),
+        MatchPhase.ELIMINATION,
+        undefined,
+        'R32',
+      );
+
+      generated.push(match);
+    }
+
+    return generated;
+  }
+
+  async generateRound16FromRound32(): Promise<Match[]> {
+    const existing = await this.matchRepository.findByEliminationRound('R16');
+    if (existing.length > 0) {
+      return existing;
+    }
+
+    const round32Matches = await this.getCompletedRoundMatches('R32', 16);
+    const round32ByNumber = this.mapMatchesByNumber(round32Matches, 73);
+    const schedule = this.generateRound16Schedule();
+
+    const pairings: Array<[number, number]> = [
+      [74, 77],
+      [73, 75],
+      [76, 78],
+      [79, 80],
+      [83, 84],
+      [81, 82],
+      [86, 88],
+      [85, 87],
+    ];
+
+    const generated: Match[] = [];
+
+    for (let i = 0; i < pairings.length; i++) {
+      const [leftMatchNumber, rightMatchNumber] = pairings[i];
+      const leftMatch = round32ByNumber.get(leftMatchNumber);
+      const rightMatch = round32ByNumber.get(rightMatchNumber);
+
+      if (!leftMatch || !rightMatch) {
+        throw new BadRequestException('Could not resolve Round of 32 winners');
+      }
+
+      generated.push(
+        await this.matchService.createMatch(
+          this.getWinnerTeamId(leftMatch),
+          this.getWinnerTeamId(rightMatch),
+          schedule[i],
+          MatchPhase.ELIMINATION,
+          undefined,
+          'R16',
+        ),
+      );
+    }
+
+    return generated;
+  }
+
+  async generateQuarterfinalsFromRound16(): Promise<Match[]> {
+    const existing = await this.matchRepository.findByEliminationRound('QF');
+    if (existing.length > 0) {
+      return existing;
+    }
+
+    const round16Matches = await this.getCompletedRoundMatches('R16', 8);
+    const round16ByNumber = this.mapMatchesByNumber(round16Matches, 89);
+    const schedule = this.generateQuarterfinalsSchedule();
+
+    const pairings: Array<[number, number]> = [
+      [89, 90],
+      [93, 94],
+      [91, 92],
+      [95, 96],
+    ];
+
+    const generated: Match[] = [];
+
+    for (let i = 0; i < pairings.length; i++) {
+      const [leftMatchNumber, rightMatchNumber] = pairings[i];
+      const leftMatch = round16ByNumber.get(leftMatchNumber);
+      const rightMatch = round16ByNumber.get(rightMatchNumber);
+
+      if (!leftMatch || !rightMatch) {
+        throw new BadRequestException('Could not resolve Round of 16 winners');
+      }
+
+      generated.push(
+        await this.matchService.createMatch(
+          this.getWinnerTeamId(leftMatch),
+          this.getWinnerTeamId(rightMatch),
+          schedule[i],
+          MatchPhase.ELIMINATION,
+          undefined,
+          'QF',
+        ),
+      );
+    }
+
+    return generated;
+  }
+
+  async generateSemifinalsFromQuarterfinals(): Promise<Match[]> {
+    const existing = await this.matchRepository.findByEliminationRound('SF');
+    if (existing.length > 0) {
+      return existing;
+    }
+
+    const quarterfinalMatches = await this.getCompletedRoundMatches('QF', 4);
+    const quarterfinalByNumber = this.mapMatchesByNumber(quarterfinalMatches, 97);
+    const schedule = this.generateSemifinalsSchedule();
+
+    const pairings: Array<[number, number]> = [
+      [97, 98],
+      [99, 100],
+    ];
+
+    const generated: Match[] = [];
+
+    for (let i = 0; i < pairings.length; i++) {
+      const [leftMatchNumber, rightMatchNumber] = pairings[i];
+      const leftMatch = quarterfinalByNumber.get(leftMatchNumber);
+      const rightMatch = quarterfinalByNumber.get(rightMatchNumber);
+
+      if (!leftMatch || !rightMatch) {
+        throw new BadRequestException('Could not resolve Quarterfinal winners');
+      }
+
+      generated.push(
+        await this.matchService.createMatch(
+          this.getWinnerTeamId(leftMatch),
+          this.getWinnerTeamId(rightMatch),
+          schedule[i],
+          MatchPhase.ELIMINATION,
+          undefined,
+          'SF',
+        ),
+      );
+    }
+
+    return generated;
+  }
+
+  async generateFinalAndThirdFromSemifinals(): Promise<{
+    finalMatch: Match;
+    thirdPlaceMatch: Match;
+  }> {
+    const existingFinal = await this.matchRepository.findByEliminationRound('FINAL');
+    const existingThird = await this.matchRepository.findByEliminationRound('THIRD');
+
+    if (existingFinal.length > 0 && existingThird.length > 0) {
+      return {
+        finalMatch: existingFinal[0],
+        thirdPlaceMatch: existingThird[0],
+      };
+    }
+
+    const semifinalMatches = await this.getCompletedRoundMatches('SF', 2);
+    const semifinalByNumber = this.mapMatchesByNumber(semifinalMatches, 101);
+    const semifinal1 = semifinalByNumber.get(101);
+    const semifinal2 = semifinalByNumber.get(102);
+
+    if (!semifinal1 || !semifinal2) {
+      throw new BadRequestException('Could not resolve semifinal matches');
+    }
+
+    const finalMatch =
+      existingFinal[0] ??
+      (await this.matchService.createMatch(
+        this.getWinnerTeamId(semifinal1),
+        this.getWinnerTeamId(semifinal2),
+        new Date('2026-07-19T18:00:00Z'),
+        MatchPhase.ELIMINATION,
+        undefined,
+        'FINAL',
+      ));
+
+    const thirdPlaceMatch =
+      existingThird[0] ??
+      (await this.matchService.createMatch(
+        this.getLoserTeamId(semifinal1),
+        this.getLoserTeamId(semifinal2),
+        new Date('2026-07-18T18:00:00Z'),
+        MatchPhase.ELIMINATION,
+        undefined,
+        'THIRD',
+      ));
+
+    return { finalMatch, thirdPlaceMatch };
+  }
+
   async configureRound16(teams: Team[]): Promise<Match[]> {
-    // Validate input
+    const canConfigure = await this.isEliminationRoundComplete('R32', 16);
+    if (!canConfigure) {
+      throw new BadRequestException(
+        'No se puede editar Octavos hasta que terminen todos los Dieciseisavos (R32)',
+      );
+    }
+
     this.validateRound16Input(teams);
 
-    // Generate matches with scheduled times
     const matches: Match[] = [];
     const matchDates = this.generateRound16Schedule();
 
-    // Create 16 matches from 16 teams
-    // Standard seeding: 1 vs 16, 2 vs 15, 3 vs 14, ..., 8 vs 9
     for (let i = 0; i < 8; i++) {
       const team1 = teams[i];
       const team2 = teams[15 - i];
@@ -54,36 +466,31 @@ export class BracketService {
       matches.push(match);
     }
 
-    // Validate bracket configuration
     await this.validateBracketConfiguration(matches, 'R16');
 
     return matches;
   }
 
-  /**
-   * Configure Quarterfinals bracket with 8 qualified teams
-   * Generates 8 matches scheduled for July 7-10, 2026
-   *
-   * @param teams - Array of 8 qualified teams from Round of 16
-   * @returns Array of 8 generated Quarterfinal matches
-   * @throws BadRequestException if validation fails
-   */
   async configureQuarterfinals(teams: Team[]): Promise<Match[]> {
-    // Validate input
+    const canConfigure = await this.isEliminationRoundComplete('R16', 8);
+    if (!canConfigure) {
+      throw new BadRequestException(
+        'No se puede editar Cuartos hasta que terminen todos los Octavos (R16)',
+      );
+    }
+
     if (!teams || teams.length !== 8) {
       throw new BadRequestException(
         'Quarterfinals configuration requires exactly 8 teams',
       );
     }
 
-    // Validate all teams exist
     for (const team of teams) {
       if (!team || !team.id) {
         throw new BadRequestException('Invalid team in Quarterfinals configuration');
       }
     }
 
-    // Check for duplicate teams
     const teamIds = new Set<string>();
     for (const team of teams) {
       if (teamIds.has(team.id)) {
@@ -97,7 +504,6 @@ export class BracketService {
     const matches: Match[] = [];
     const matchDates = this.generateQuarterfinalsSchedule();
 
-    // Create 8 matches (4 pairs)
     for (let i = 0; i < 4; i++) {
       const team1 = teams[i];
       const team2 = teams[7 - i];
@@ -115,40 +521,34 @@ export class BracketService {
       matches.push(match);
     }
 
-    // Validate bracket configuration
     await this.validateBracketConfiguration(matches, 'QF');
 
     return matches;
   }
 
-  /**
-   * Configure Semifinals bracket with 4 qualified teams
-   * Generates 2 Semifinal matches and 1 Third Place match
-   * Scheduled for July 14-15, 2026
-   *
-   * @param teams - Array of 4 qualified teams from Quarterfinals
-   * @returns Object containing semifinal matches and third place match
-   * @throws BadRequestException if validation fails
-   */
   async configureSemifinals(teams: Team[]): Promise<{
     semifinalMatches: Match[];
     thirdPlaceMatch: Match;
   }> {
-    // Validate input
+    const canConfigure = await this.isEliminationRoundComplete('QF', 4);
+    if (!canConfigure) {
+      throw new BadRequestException(
+        'No se puede editar Semifinales hasta que terminen todos los Cuartos (QF)',
+      );
+    }
+
     if (!teams || teams.length !== 4) {
       throw new BadRequestException(
         'Semifinals configuration requires exactly 4 teams',
       );
     }
 
-    // Validate all teams exist
     for (const team of teams) {
       if (!team || !team.id) {
         throw new BadRequestException('Invalid team in Semifinals configuration');
       }
     }
 
-    // Check for duplicate teams
     const teamIds = new Set<string>();
     for (const team of teams) {
       if (teamIds.has(team.id)) {
@@ -162,7 +562,6 @@ export class BracketService {
     const semifinalMatches: Match[] = [];
     const semifinalDates = this.generateSemifinalsSchedule();
 
-    // Create 2 semifinal matches
     for (let i = 0; i < 2; i++) {
       const team1 = teams[i];
       const team2 = teams[3 - i];
@@ -180,18 +579,16 @@ export class BracketService {
       semifinalMatches.push(match);
     }
 
-    // Create Third Place match (scheduled for August 14, 2026)
     const thirdPlaceTime = new Date('2026-08-14T18:00:00Z');
     const thirdPlaceMatch = await this.matchService.createMatch(
-      teams[1].id, // Loser of first semifinal
-      teams[2].id, // Loser of second semifinal
+      teams[1].id,
+      teams[2].id,
       thirdPlaceTime,
       MatchPhase.ELIMINATION,
       undefined,
       'THIRD',
     );
 
-    // Validate bracket configuration
     await this.validateBracketConfiguration(semifinalMatches, 'SF');
 
     return {
@@ -200,17 +597,7 @@ export class BracketService {
     };
   }
 
-  /**
-   * Configure Final match between two semifinal winners
-   * Scheduled for August 16, 2026
-   *
-   * @param team1 - First finalist
-   * @param team2 - Second finalist
-   * @returns Generated Final match
-   * @throws BadRequestException if validation fails
-   */
   async configureFinal(team1: Team, team2: Team): Promise<Match> {
-    // Validate input
     if (!team1 || !team1.id || !team2 || !team2.id) {
       throw new BadRequestException('Invalid teams for Final configuration');
     }
@@ -219,9 +606,8 @@ export class BracketService {
       throw new BadRequestException('Final teams must be different');
     }
 
-    // Create Final match (scheduled for August 16, 2026)
     const finalTime = new Date('2026-08-16T18:00:00Z');
-    const finalMatch = await this.matchService.createMatch(
+    return this.matchService.createMatch(
       team1.id,
       team2.id,
       finalTime,
@@ -229,33 +615,188 @@ export class BracketService {
       undefined,
       'FINAL',
     );
-
-    return finalMatch;
   }
 
-  /**
-   * Validate Round of 16 bracket configuration
-   * Ensures exactly 16 teams, no duplicates, and valid team data
-   *
-   * @param teams - Array of teams to validate
-   * @throws BadRequestException if validation fails
-   */
+  private assignThirdTeamsToSlots(
+    qualifiedThirds: RankedTeam[],
+    slots: ThirdSlot[],
+  ): Map<number, RankedTeam> {
+    const assigned = new Map<number, RankedTeam>();
+    const usedGroups = new Set<string>();
+
+    const solve = (): boolean => {
+      if (assigned.size === slots.length) {
+        return true;
+      }
+
+      let selectedSlot: ThirdSlot | null = null;
+      let selectedCandidates: RankedTeam[] = [];
+
+      for (const slot of slots) {
+        if (assigned.has(slot.matchNumber)) {
+          continue;
+        }
+
+        const candidates = qualifiedThirds
+          .filter(
+            (team) =>
+              !usedGroups.has(team.group) &&
+              slot.allowedGroups.includes(team.group),
+          )
+          .sort((a, b) => a.group.localeCompare(b.group));
+
+        if (candidates.length === 0) {
+          return false;
+        }
+
+        if (!selectedSlot || candidates.length < selectedCandidates.length) {
+          selectedSlot = slot;
+          selectedCandidates = candidates;
+        }
+      }
+
+      if (!selectedSlot) {
+        return false;
+      }
+
+      for (const candidate of selectedCandidates) {
+        assigned.set(selectedSlot.matchNumber, candidate);
+        usedGroups.add(candidate.group);
+
+        if (solve()) {
+          return true;
+        }
+
+        assigned.delete(selectedSlot.matchNumber);
+        usedGroups.delete(candidate.group);
+      }
+
+      return false;
+    };
+
+    if (!solve()) {
+      throw new BadRequestException(
+        'Unable to map qualified third-placed teams to Round of 32 slots',
+      );
+    }
+
+    return assigned;
+  }
+
+  private getRound32Templates(): Round32Template[] {
+    return [
+      {
+        matchNumber: 73,
+        scheduledTime: '2026-06-28T20:00:00Z',
+        team1: { type: 'group', position: 2, group: 'A' },
+        team2: { type: 'group', position: 2, group: 'B' },
+      },
+      {
+        matchNumber: 74,
+        scheduledTime: '2026-06-29T20:00:00Z',
+        team1: { type: 'group', position: 1, group: 'E' },
+        team2: { type: 'third', allowedGroups: ['A', 'B', 'C', 'D', 'F'] },
+      },
+      {
+        matchNumber: 75,
+        scheduledTime: '2026-06-29T23:00:00Z',
+        team1: { type: 'group', position: 1, group: 'F' },
+        team2: { type: 'group', position: 2, group: 'C' },
+      },
+      {
+        matchNumber: 76,
+        scheduledTime: '2026-06-30T02:00:00Z',
+        team1: { type: 'group', position: 1, group: 'C' },
+        team2: { type: 'group', position: 2, group: 'F' },
+      },
+      {
+        matchNumber: 77,
+        scheduledTime: '2026-06-30T20:00:00Z',
+        team1: { type: 'group', position: 1, group: 'I' },
+        team2: { type: 'third', allowedGroups: ['C', 'D', 'F', 'G', 'H'] },
+      },
+      {
+        matchNumber: 78,
+        scheduledTime: '2026-06-30T23:00:00Z',
+        team1: { type: 'group', position: 2, group: 'E' },
+        team2: { type: 'group', position: 2, group: 'I' },
+      },
+      {
+        matchNumber: 79,
+        scheduledTime: '2026-07-01T02:00:00Z',
+        team1: { type: 'group', position: 1, group: 'A' },
+        team2: { type: 'third', allowedGroups: ['C', 'E', 'F', 'H', 'I'] },
+      },
+      {
+        matchNumber: 80,
+        scheduledTime: '2026-07-01T20:00:00Z',
+        team1: { type: 'group', position: 1, group: 'L' },
+        team2: { type: 'third', allowedGroups: ['E', 'H', 'I', 'J', 'K'] },
+      },
+      {
+        matchNumber: 81,
+        scheduledTime: '2026-07-01T23:00:00Z',
+        team1: { type: 'group', position: 1, group: 'D' },
+        team2: { type: 'third', allowedGroups: ['B', 'E', 'F', 'I', 'J'] },
+      },
+      {
+        matchNumber: 82,
+        scheduledTime: '2026-07-02T02:00:00Z',
+        team1: { type: 'group', position: 1, group: 'G' },
+        team2: { type: 'third', allowedGroups: ['A', 'E', 'H', 'I', 'J'] },
+      },
+      {
+        matchNumber: 83,
+        scheduledTime: '2026-07-02T20:00:00Z',
+        team1: { type: 'group', position: 2, group: 'K' },
+        team2: { type: 'group', position: 2, group: 'L' },
+      },
+      {
+        matchNumber: 84,
+        scheduledTime: '2026-07-02T23:00:00Z',
+        team1: { type: 'group', position: 1, group: 'H' },
+        team2: { type: 'group', position: 2, group: 'J' },
+      },
+      {
+        matchNumber: 85,
+        scheduledTime: '2026-07-03T02:00:00Z',
+        team1: { type: 'group', position: 1, group: 'B' },
+        team2: { type: 'third', allowedGroups: ['E', 'F', 'G', 'I', 'J'] },
+      },
+      {
+        matchNumber: 86,
+        scheduledTime: '2026-07-03T20:00:00Z',
+        team1: { type: 'group', position: 1, group: 'J' },
+        team2: { type: 'group', position: 2, group: 'H' },
+      },
+      {
+        matchNumber: 87,
+        scheduledTime: '2026-07-03T23:00:00Z',
+        team1: { type: 'group', position: 1, group: 'K' },
+        team2: { type: 'third', allowedGroups: ['D', 'E', 'I', 'J', 'L'] },
+      },
+      {
+        matchNumber: 88,
+        scheduledTime: '2026-07-04T02:00:00Z',
+        team1: { type: 'group', position: 2, group: 'D' },
+        team2: { type: 'group', position: 2, group: 'G' },
+      },
+    ];
+  }
+
   private validateRound16Input(teams: Team[]): void {
-    // Check exact count
     if (!teams || teams.length !== 16) {
       throw new BadRequestException(
         'Round of 16 configuration requires exactly 16 teams',
       );
     }
 
-    // Check for null/undefined teams
     for (const team of teams) {
       if (!team || !team.id) {
         throw new BadRequestException('Invalid team in Round of 16 configuration');
       }
     }
 
-    // Check for duplicate teams
     const teamIds = new Set<string>();
     for (const team of teams) {
       if (teamIds.has(team.id)) {
@@ -267,23 +808,10 @@ export class BracketService {
     }
   }
 
-  /**
-   * Validate bracket configuration after match generation
-   * Ensures correct number of matches and valid scheduling
-   *
-   * @param matches - Generated matches to validate
-   * @param round - Elimination round identifier (R16, QF, SF, FINAL)
-   * @throws BadRequestException if validation fails
-   */
   private async validateBracketConfiguration(
     matches: Match[],
     round: string,
   ): Promise<void> {
-    // Validate match count based on round
-    // Round of 16: 16 teams = 8 matches
-    // Quarterfinals: 8 teams = 4 matches
-    // Semifinals: 4 teams = 2 matches
-    // Final: 2 teams = 1 match
     const expectedCounts: { [key: string]: number } = {
       R16: 8,
       QF: 4,
@@ -299,7 +827,6 @@ export class BracketService {
       );
     }
 
-    // Validate all matches have correct elimination round
     for (const match of matches) {
       if (match.eliminationRound !== round) {
         throw new BadRequestException(
@@ -314,20 +841,10 @@ export class BracketService {
       }
     }
 
-    // Validate scheduling dates based on round
     this.validateSchedulingDates(matches, round);
-
-    // Validate no duplicate team pairings
     this.validateNoDuplicatePairings(matches);
   }
 
-  /**
-   * Validate that matches are scheduled within expected date ranges
-   *
-   * @param matches - Matches to validate
-   * @param round - Elimination round identifier
-   * @throws BadRequestException if scheduling is invalid
-   */
   private validateSchedulingDates(matches: Match[], round: string): void {
     const dateRanges: { [key: string]: { start: Date; end: Date } } = {
       R16: {
@@ -353,9 +870,7 @@ export class BracketService {
     };
 
     const range = dateRanges[round];
-    if (!range) {
-      return; // No date validation for unknown rounds
-    }
+    if (!range) return;
 
     for (const match of matches) {
       if (match.scheduledTime < range.start || match.scheduledTime > range.end) {
@@ -366,17 +881,10 @@ export class BracketService {
     }
   }
 
-  /**
-   * Validate that no duplicate team pairings exist
-   *
-   * @param matches - Matches to validate
-   * @throws BadRequestException if duplicate pairings found
-   */
   private validateNoDuplicatePairings(matches: Match[]): void {
     const pairings = new Set<string>();
 
     for (const match of matches) {
-      // Create a normalized pairing key (sorted to handle both directions)
       const ids = [match.team1Id, match.team2Id].sort();
       const pairingKey = `${ids[0]}-${ids[1]}`;
 
@@ -390,55 +898,104 @@ export class BracketService {
     }
   }
 
-  /**
-   * Generate scheduled times for Round of 16 matches
-   * 16 matches over 6 days (July 1-6, 2026)
-   * Typically 2-3 matches per day
-   *
-   * @returns Array of 8 scheduled times (for 8 match pairs)
-   */
+  private async tryGenerateNextPhase<T>(factory: () => Promise<T>): Promise<void> {
+    try {
+      await factory();
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private mapMatchesByNumber(matches: Match[], startingMatchNumber: number): Map<number, Match> {
+    const sorted = [...matches].sort(
+      (a, b) => a.scheduledTime.getTime() - b.scheduledTime.getTime(),
+    );
+
+    const map = new Map<number, Match>();
+    for (let index = 0; index < sorted.length; index++) {
+      map.set(startingMatchNumber + index, sorted[index]);
+    }
+
+    return map;
+  }
+
+  private getWinnerTeamId(match: Match): string {
+    if (!match.result || !match.result.winnerId) {
+      throw new BadRequestException(`Match ${match.id} does not have a winner`);
+    }
+    return match.result.winnerId;
+  }
+
+  private getLoserTeamId(match: Match): string {
+    const winnerTeamId = this.getWinnerTeamId(match);
+    if (winnerTeamId === match.team1Id) {
+      return match.team2Id;
+    }
+    if (winnerTeamId === match.team2Id) {
+      return match.team1Id;
+    }
+    throw new BadRequestException(`Match ${match.id} winner does not match participants`);
+  }
+
+  private async getCompletedRoundMatches(round: string, expectedMatches: number): Promise<Match[]> {
+    const matches = await this.matchRepository.findByEliminationRound(round);
+    if (matches.length !== expectedMatches) {
+      throw new BadRequestException(
+        `Expected ${expectedMatches} matches in ${round}, got ${matches.length}`,
+      );
+    }
+
+    const allCompleted = matches.every((match) => !!match.result);
+    if (!allCompleted) {
+      throw new BadRequestException(`Round ${round} must be fully completed`);
+    }
+
+    return matches;
+  }
+
+  private async isGroupPhaseComplete(): Promise<boolean> {
+    const groupMatches = await this.matchRepository.findByPhase(MatchPhase.GROUP);
+    return groupMatches.length > 0 && groupMatches.every((match) => !!match.result);
+  }
+
+  private async isEliminationRoundComplete(round: string, expectedMatches: number): Promise<boolean> {
+    const matches = await this.matchRepository.findByEliminationRound(round);
+    if (matches.length !== expectedMatches) {
+      return false;
+    }
+
+    return matches.every((match) => !!match.result);
+  }
+
   private generateRound16Schedule(): Date[] {
-    // Standard Copa America schedule: 2-3 matches per day
-    // Matches at 14:00 and 18:00 UTC (10:00 and 14:00 La Paz time)
     return [
-      new Date('2026-07-01T14:00:00Z'), // Match 1
-      new Date('2026-07-01T18:00:00Z'), // Match 2
-      new Date('2026-07-02T14:00:00Z'), // Match 3
-      new Date('2026-07-02T18:00:00Z'), // Match 4
-      new Date('2026-07-03T14:00:00Z'), // Match 5
-      new Date('2026-07-03T18:00:00Z'), // Match 6
-      new Date('2026-07-04T14:00:00Z'), // Match 7
-      new Date('2026-07-04T18:00:00Z'), // Match 8
+      new Date('2026-07-01T14:00:00Z'),
+      new Date('2026-07-01T18:00:00Z'),
+      new Date('2026-07-02T14:00:00Z'),
+      new Date('2026-07-02T18:00:00Z'),
+      new Date('2026-07-03T14:00:00Z'),
+      new Date('2026-07-03T18:00:00Z'),
+      new Date('2026-07-04T14:00:00Z'),
+      new Date('2026-07-04T18:00:00Z'),
     ];
   }
 
-  /**
-   * Generate scheduled times for Quarterfinals matches
-   * 8 matches over 4 days (July 7-10, 2026)
-   * 2 matches per day
-   *
-   * @returns Array of 4 scheduled times (for 4 match pairs)
-   */
   private generateQuarterfinalsSchedule(): Date[] {
     return [
-      new Date('2026-07-07T14:00:00Z'), // Match 1
-      new Date('2026-07-07T18:00:00Z'), // Match 2
-      new Date('2026-07-08T14:00:00Z'), // Match 3
-      new Date('2026-07-08T18:00:00Z'), // Match 4
+      new Date('2026-07-07T14:00:00Z'),
+      new Date('2026-07-07T18:00:00Z'),
+      new Date('2026-07-08T14:00:00Z'),
+      new Date('2026-07-08T18:00:00Z'),
     ];
   }
 
-  /**
-   * Generate scheduled times for Semifinals matches
-   * 2 matches over 2 days (July 14-15, 2026)
-   * 1 match per day
-   *
-   * @returns Array of 2 scheduled times
-   */
   private generateSemifinalsSchedule(): Date[] {
     return [
-      new Date('2026-07-14T18:00:00Z'), // Semifinal 1
-      new Date('2026-07-15T18:00:00Z'), // Semifinal 2
+      new Date('2026-07-14T18:00:00Z'),
+      new Date('2026-07-15T18:00:00Z'),
     ];
   }
 }

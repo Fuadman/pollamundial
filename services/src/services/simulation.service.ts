@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource, In } from 'typeorm';
+import { DataSource, In, Not } from 'typeorm';
 import { v4 as uuid } from 'uuid';
 
 import { UserRepository } from '../repositories/user.repository';
@@ -12,6 +12,10 @@ import { User } from '../entities/user.entity';
 import { Prediction } from '../entities/prediction.entity';
 import { MatchStatus, MatchPhase } from '../entities/match.entity';
 import { UserScore } from '../entities/user-score.entity';
+import { Team } from '../entities/team.entity';
+import { Match } from '../entities/match.entity';
+import { MatchResult } from '../entities/match-result.entity';
+import { NewsArticle } from '../entities/news-article.entity';
 import { MatchResultService } from './match-result.service';
 import { ScoringService } from './scoring.service';
 
@@ -25,6 +29,7 @@ const FAKE_NAMES = [
 
 const SIM_EMAIL_SUFFIX = '@simulacro.test';
 const SIM_GOOGLE_PREFIX = 'sim-google-';
+const ADMIN_EMAIL = 'fuadsalo@gmail.com';
 
 @Injectable()
 export class SimulationService {
@@ -54,6 +59,32 @@ export class SimulationService {
   private async getFakeUserIds(): Promise<string[]> {
     const users = await this.getFakeUsersEntities();
     return users.map((user) => user.id);
+  }
+
+  private async getAdminUserId(): Promise<string | null> {
+    const adminUser = await this.userRepository.findOne({
+      where: { email: ADMIN_EMAIL },
+    });
+    return adminUser?.id ?? null;
+  }
+
+  private async ensureUserScoreEntry(userId: string): Promise<void> {
+    const existing = await this.userScoreRepository.findOne({
+      where: { userId },
+    });
+
+    if (existing) {
+      return;
+    }
+
+    const newUserScore = this.userScoreRepository.create({
+      id: uuid(),
+      userId,
+      totalPoints: 0,
+      groupStagePoints: 0,
+      eliminationPoints: 0,
+    });
+    await this.userScoreRepository.save(newUserScore);
   }
 
   private async getSimulatedResultMatchIds(fakeUserIds: string[]): Promise<string[]> {
@@ -113,7 +144,15 @@ export class SimulationService {
   /** Generate random predictions for all fake users for all group-stage matches */
   async generateRandomPredictions(): Promise<number> {
     const fakeUserIds = await this.getFakeUserIds();
-    if (fakeUserIds.length === 0) {
+    const adminUserId = await this.getAdminUserId();
+    const userIds = Array.from(
+      new Set([
+        ...fakeUserIds,
+        ...(adminUserId ? [adminUserId] : []),
+      ]),
+    );
+
+    if (userIds.length === 0) {
       return 0;
     }
 
@@ -123,7 +162,9 @@ export class SimulationService {
 
     let total = 0;
 
-    for (const userId of fakeUserIds) {
+    for (const userId of userIds) {
+      await this.ensureUserScoreEntry(userId);
+
       for (const match of matches) {
         // Skip if prediction already exists
         const existing = await this.predictionRepository.findByUserAndMatch(userId, match.id);
@@ -168,6 +209,7 @@ export class SimulationService {
     published: number;
     updated: number;
     scoredPredictions: number;
+    matchIds: string[];
   }> {
     const groupMatches = await this.matchRepository.find({
       where: { phase: MatchPhase.GROUP },
@@ -176,6 +218,7 @@ export class SimulationService {
     let published = 0;
     let updated = 0;
     let scoredPredictions = 0;
+    const matchIds: string[] = [];
 
     for (const match of groupMatches) {
       const team1Score = Math.floor(Math.random() * 5);
@@ -188,28 +231,29 @@ export class SimulationService {
           match.id,
           team1Score,
           team2Score,
+          undefined,
+          undefined,
           'simulation-system',
         );
-
-        const scored = await this.scoringService.calculateAllScoresForMatch(match.id);
-
         published++;
-        scoredPredictions += scored;
       } else {
         await this.matchResultService.updateResult(
           match.id,
           team1Score,
           team2Score,
+          undefined,
+          undefined,
           'simulation-system',
         );
-
-        const scored = await this.scoringService.recalculateScoresForMatch(match.id);
         updated++;
-        scoredPredictions += scored;
       }
+
+      scoredPredictions += await this.predictionRepository.countByMatchId(match.id);
+
+      matchIds.push(match.id);
     }
 
-    return { published, updated, scoredPredictions };
+    return { published, updated, scoredPredictions, matchIds };
   }
 
   /**
@@ -487,6 +531,151 @@ export class SimulationService {
       fakeResults,
       scheduledMatches,
       pendingGroupMatches,
+    };
+  }
+
+  async resetToAdminOnly(): Promise<{
+    usersDeleted: number;
+    predictionsDeleted: number;
+    resultsDeleted: number;
+    matchesDeleted: number;
+    teamsDeleted: number;
+    userScoresDeleted: number;
+    newsDeleted: number;
+    adminEmail: string;
+  }> {
+    const adminUser = await this.userRepository.findOne({
+      where: { email: ADMIN_EMAIL },
+    });
+
+    if (!adminUser) {
+      throw new Error(`Admin user not found: ${ADMIN_EMAIL}`);
+    }
+
+    const [usersCount, predictionsCount, resultsCount, matchesCount, teamsCount, userScoresCount, newsCount] =
+      await Promise.all([
+        this.userRepository.count({ where: { id: Not(adminUser.id) } }),
+        this.predictionRepository.count(),
+        this.matchResultRepository.count(),
+        this.matchRepository.count(),
+        this.dataSource.getRepository(Team).count(),
+        this.userScoreRepository.count(),
+        this.dataSource.getRepository(NewsArticle).count(),
+      ]);
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.delete(Prediction, {});
+      await manager.delete(MatchResult, {});
+      await manager.delete(Match, {});
+      await manager.delete(Team, {});
+      await manager.delete(UserScore, {});
+      await manager.delete(NewsArticle, {});
+      await manager.delete(User, { id: Not(adminUser.id) });
+
+      await manager.update(
+        User,
+        { id: adminUser.id },
+        {
+          role: 'admin',
+          registrationCompleted: true,
+          paymentCompleted: true,
+          registrationTimestamp: adminUser.registrationTimestamp ?? new Date(),
+          paymentTimestamp: adminUser.paymentTimestamp ?? new Date(),
+        },
+      );
+
+      const adminScore = manager.create(UserScore, {
+        id: uuid(),
+        userId: adminUser.id,
+        totalPoints: 0,
+        groupStagePoints: 0,
+        eliminationPoints: 0,
+      });
+      await manager.save(UserScore, adminScore);
+    });
+
+    return {
+      usersDeleted: usersCount,
+      predictionsDeleted: predictionsCount,
+      resultsDeleted: resultsCount,
+      matchesDeleted: matchesCount,
+      teamsDeleted: teamsCount,
+      userScoresDeleted: userScoresCount,
+      newsDeleted: newsCount,
+      adminEmail: ADMIN_EMAIL,
+    };
+  }
+
+  async recalculatePositions(): Promise<{
+    matchesProcessed: number;
+    predictionsScored: number;
+    usersInitialized: number;
+  }> {
+    const predictionUsersRows = await this.dataSource
+      .getRepository(Prediction)
+      .createQueryBuilder('prediction')
+      .select('DISTINCT prediction.userId', 'userId')
+      .getRawMany<{ userId: string }>();
+
+    const userIds = predictionUsersRows.map((row) => row.userId);
+    let usersInitialized = 0;
+
+    if (userIds.length > 0) {
+      const existingScores = await this.userScoreRepository.find({
+        where: { userId: In(userIds) },
+      });
+      const existingScoreUserIds = new Set(existingScores.map((score) => score.userId));
+
+      const missingUserIds = userIds.filter((userId) => !existingScoreUserIds.has(userId));
+
+      for (const userId of missingUserIds) {
+        const scoreEntry = this.userScoreRepository.create({
+          id: uuid(),
+          userId,
+          totalPoints: 0,
+          groupStagePoints: 0,
+          eliminationPoints: 0,
+        });
+        await this.userScoreRepository.save(scoreEntry);
+      }
+
+      usersInitialized = missingUserIds.length;
+    }
+
+    await this.userScoreRepository
+      .createQueryBuilder()
+      .update(UserScore)
+      .set({
+        totalPoints: 0,
+        groupStagePoints: 0,
+        eliminationPoints: 0,
+      })
+      .execute();
+
+    await this.predictionRepository
+      .createQueryBuilder()
+      .update(Prediction)
+      .set({ pointsEarned: 0 })
+      .execute();
+
+    const resultRows = await this.dataSource
+      .getRepository(MatchResult)
+      .createQueryBuilder('result')
+      .select('DISTINCT result.matchId', 'matchId')
+      .getRawMany<{ matchId: string }>();
+
+    const matchIds = resultRows.map((row) => row.matchId);
+    let predictionsScored = 0;
+
+    for (const matchId of matchIds) {
+      const scoredCount = await this.scoringService.calculateAllScoresForMatch(matchId);
+      predictionsScored += scoredCount;
+    }
+
+    return {
+      matchesProcessed: matchIds.length,
+      predictionsScored,
+      usersInitialized,
     };
   }
 }

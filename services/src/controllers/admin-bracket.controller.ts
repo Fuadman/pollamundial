@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Post,
   Req,
   UseGuards,
@@ -25,6 +26,17 @@ export class AdminBracketController {
     private readonly bracketService: BracketService,
     private readonly teamRepository: TeamRepository,
   ) {}
+
+  @Get('phase-readiness')
+  async getPhaseReadiness(@Req() req: any): Promise<{
+    round32AutoEnabled: boolean;
+    round16Editable: boolean;
+    quarterfinalsEditable: boolean;
+    semifinalsEditable: boolean;
+  }> {
+    await this.adminService.enforceAdminAccess(req.user.id);
+    return this.bracketService.getPhaseEditReadiness();
+  }
 
   @Post('round16')
   async configureRound16(
@@ -66,6 +78,19 @@ export class AdminBracketController {
     return {
       semifinalMatches: result.semifinalMatches.length,
       thirdPlaceMatchId: result.thirdPlaceMatch.id,
+    };
+  }
+
+  @Post('generate-round32')
+  async generateRound32(
+    @Req() req: any,
+  ): Promise<{ createdMatches: number; matchIds: string[] }> {
+    await this.adminService.enforceAdminAccess(req.user.id);
+    const matches = await this.bracketService.generateRound32FromGroupStage();
+
+    return {
+      createdMatches: matches.length,
+      matchIds: matches.map((match) => match.id),
     };
   }
 

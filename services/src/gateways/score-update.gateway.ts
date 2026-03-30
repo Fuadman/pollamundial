@@ -168,6 +168,26 @@ export class ScoreUpdateGateway
   }
 
   /**
+   * Broadcast final/published result update to all clients
+   */
+  broadcastMatchResult(matchId: string, message?: string): void {
+    this.server.emit('match-result', {
+      matchId,
+      message: message ?? 'Resultado publicado',
+    });
+
+    this.logger.log(`Match result broadcasted for match ${matchId}`);
+  }
+
+  /**
+   * Broadcast leaderboard snapshot to all clients
+   */
+  broadcastLeaderboardUpdate(entries: unknown[]): void {
+    this.server.emit('leaderboard-update', { entries });
+    this.logger.log(`Leaderboard update broadcasted with ${entries.length} entries`);
+  }
+
+  /**
    * Get number of connected clients for a match
    */
   getConnectedClientsCount(matchId: string): number {

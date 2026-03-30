@@ -63,6 +63,13 @@ export function AdminBracketPage() {
   const [search, setSearch] = useState('');
   const [selectedRound, setSelectedRound] = useState<BracketRoundKey>('round16');
   const [selectedTeamIds, setSelectedTeamIds] = useState<string[]>([]);
+  const [generatingRound32, setGeneratingRound32] = useState(false);
+  const [phaseReadiness, setPhaseReadiness] = useState<{
+    round32AutoEnabled: boolean;
+    round16Editable: boolean;
+    quarterfinalsEditable: boolean;
+    semifinalsEditable: boolean;
+  } | null>(null);
 
   const currentRound = ROUND_CONFIGS.find((round) => round.key === selectedRound) ?? ROUND_CONFIGS[0];
 
@@ -90,6 +97,19 @@ export function AdminBracketPage() {
   }, [dispatch]);
 
   useEffect(() => {
+    const loadReadiness = async () => {
+      try {
+        const response = await adminService.getBracketPhaseReadiness();
+        setPhaseReadiness(response.data);
+      } catch {
+        setPhaseReadiness(null);
+      }
+    };
+
+    void loadReadiness();
+  }, []);
+
+  useEffect(() => {
     setSelectedTeamIds([]);
   }, [selectedRound]);
 
@@ -107,7 +127,22 @@ export function AdminBracketPage() {
     [selectedTeamIds, teams],
   );
 
+  const canEditSelectedRound =
+    selectedRound === 'round16'
+      ? (phaseReadiness?.round16Editable ?? false)
+      : selectedRound === 'quarterfinals'
+        ? (phaseReadiness?.quarterfinalsEditable ?? false)
+        : (phaseReadiness?.semifinalsEditable ?? false);
+
   const toggleTeam = (teamId: string) => {
+    if (!canEditSelectedRound) {
+      dispatch(addNotification({
+        type: 'warning',
+        message: 'Esta fase solo se puede editar cuando la fase previa esta completa.',
+      }));
+      return;
+    }
+
     setSelectedTeamIds((current) => {
       if (current.includes(teamId)) {
         return current.filter((id) => id !== teamId);
@@ -126,6 +161,14 @@ export function AdminBracketPage() {
   };
 
   const handleSubmit = async () => {
+    if (!canEditSelectedRound) {
+      dispatch(addNotification({
+        type: 'warning',
+        message: 'No puedes editar esta fase hasta que concluya la fase previa.',
+      }));
+      return;
+    }
+
     if (selectedTeamIds.length !== currentRound.requiredTeams) {
       dispatch(addNotification({
         type: 'warning',
@@ -148,10 +191,40 @@ export function AdminBracketPage() {
         type: 'success',
         message: `Bracket de ${currentRound.label.toLowerCase()} configurado correctamente.`,
       }));
+      const readinessResponse = await adminService.getBracketPhaseReadiness();
+      setPhaseReadiness(readinessResponse.data);
     } catch (error) {
       dispatch(addNotification({ type: 'error', message: getErrorMessage(error) }));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleGenerateRound32 = async () => {
+    if (!phaseReadiness?.round32AutoEnabled) {
+      dispatch(addNotification({
+        type: 'warning',
+        message: 'Debes completar todos los partidos de grupos antes de generar Dieciseisavos.',
+      }));
+      return;
+    }
+
+    setGeneratingRound32(true);
+    try {
+      const response = await adminService.generateRound32();
+      const created = response.data.createdMatches ?? 0;
+      dispatch(
+        addNotification({
+          type: 'success',
+          message: `Dieciseisavos generados correctamente (${created} partidos).`,
+        }),
+      );
+      const readinessResponse = await adminService.getBracketPhaseReadiness();
+      setPhaseReadiness(readinessResponse.data);
+    } catch (error) {
+      dispatch(addNotification({ type: 'error', message: getErrorMessage(error) }));
+    } finally {
+      setGeneratingRound32(false);
     }
   };
 
@@ -162,6 +235,25 @@ export function AdminBracketPage() {
         <p className="text-sm text-gray-500">
           Selecciona las selecciones clasificadas por ronda. La configuracion valida cantidad exacta antes de enviarse.
         </p>
+      </div>
+
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-emerald-900">Generacion automatica de Dieciseisavos</p>
+            <p className="text-xs text-emerald-800 mt-1">
+              Cuando todos los resultados de grupos estan publicados, genera automaticamente los partidos 73-88 segun reglas FIFA.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={handleGenerateRound32}
+            loading={generatingRound32}
+            disabled={!phaseReadiness?.round32AutoEnabled}
+          >
+            Generar Dieciseisavos
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -248,7 +340,15 @@ export function AdminBracketPage() {
         )}
 
         <div className="flex justify-end">
-          <Button loading={saving} onClick={handleSubmit} disabled={loading || selectedTeamIds.length !== currentRound.requiredTeams}>
+          <Button
+            loading={saving}
+            onClick={handleSubmit}
+            disabled={
+              loading ||
+              !canEditSelectedRound ||
+              selectedTeamIds.length !== currentRound.requiredTeams
+            }
+          >
             Guardar bracket
           </Button>
         </div>

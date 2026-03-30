@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BracketService } from './bracket.service';
 import { MatchService } from './match.service';
 import { TeamRepository } from '../repositories/team.repository';
+import { MatchRepository } from '../repositories/match.repository';
+import { MatchResultRepository } from '../repositories/match-result.repository';
 import { Team } from '../entities/team.entity';
 import { Match, MatchStatus, MatchPhase } from '../entities/match.entity';
 import { BadRequestException } from '@nestjs/common';
@@ -43,6 +45,7 @@ describe('BracketService', () => {
     eliminationRound,
     createdAt: new Date(),
     updatedAt: new Date(),
+    predictionsBlocked: false,
     predictions: [],
     result: null,
   });
@@ -67,12 +70,30 @@ describe('BracketService', () => {
             findByIds: jest.fn(),
           },
         },
+        {
+          provide: MatchRepository,
+          useValue: {
+            findByEliminationRound: jest.fn(),
+            findByPhase: jest.fn(),
+            findOne: jest.fn(),
+          },
+        },
+        {
+          provide: MatchResultRepository,
+          useValue: {
+            find: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
     service = module.get<BracketService>(BracketService);
     matchService = module.get<MatchService>(MatchService);
     teamRepository = module.get<TeamRepository>(TeamRepository);
+
+    jest
+      .spyOn(service as any, 'isEliminationRoundComplete')
+      .mockResolvedValue(true);
   });
 
   describe('configureRound16', () => {

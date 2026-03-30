@@ -1,8 +1,15 @@
 import apiClient from './apiClient';
-import type { Match, MatchPhase, MatchStatus } from '../types';
+import type {
+  EliminationRound,
+  GroupStandings,
+  Match,
+  MatchPhase,
+  MatchStatus,
+} from '../types';
 
 export interface MatchFilters {
   phase?: MatchPhase;
+  eliminationRound?: EliminationRound;
   status?: MatchStatus;
   group?: string;
   startDate?: string;
@@ -22,4 +29,10 @@ export const matchService = {
 
   getEliminationSchedule: () =>
     apiClient.get<Match[]>('/matches/schedule/elimination'),
+
+  getGroupStandings: (group?: string) =>
+    apiClient.get<{ data: GroupStandings[]; updatedAt: string }>(
+      '/matches/standings/group',
+      { params: group ? { group } : undefined },
+    ),
 };

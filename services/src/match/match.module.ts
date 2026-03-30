@@ -15,6 +15,7 @@ import { LoggerService } from '../common/logger/logger.service';
 import { BracketService } from '../services/bracket.service';
 import { MatchService } from '../services/match.service';
 import { SimulationService } from '../services/simulation.service';
+import { MatchResultSubscriber } from '../subscribers/match-result.subscriber';
 
 @Module({
   imports: [DataAccessModule, AuthModule, CacheModule],
@@ -34,6 +35,7 @@ import { SimulationService } from '../services/simulation.service';
     BracketService,
     MatchService,
     SimulationService,
+    MatchResultSubscriber,
   ],
   exports: [BracketService, MatchService],
 })

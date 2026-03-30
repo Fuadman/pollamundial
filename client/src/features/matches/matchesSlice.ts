@@ -1,6 +1,11 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { PayloadAction } from '@reduxjs/toolkit';
-import type { Match, MatchPhase, MatchStatus } from '../../types';
+import type {
+  EliminationRound,
+  Match,
+  MatchPhase,
+  MatchStatus,
+} from '../../types';
 import { matchService, type MatchFilters } from '../../services/match.service';
 
 interface MatchesState {
@@ -10,6 +15,7 @@ interface MatchesState {
   error: string | null;
   filters: {
     phase?: MatchPhase;
+    eliminationRound?: EliminationRound;
     status?: MatchStatus;
     group?: string;
   };
@@ -83,6 +89,10 @@ const matchesSlice = createSlice({
       .addCase(fetchMatch.fulfilled, (state, action) => {
         state.loading = false;
         state.currentMatch = action.payload;
+        const idx = state.items.findIndex((m) => m.id === action.payload.id);
+        if (idx !== -1) {
+          state.items[idx] = action.payload;
+        }
       })
       .addCase(fetchMatch.rejected, (state, action) => {
         state.loading = false;

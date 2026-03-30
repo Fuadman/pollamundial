@@ -12,6 +12,16 @@ interface PendingMatch {
   scheduledTime: string;
   status: string;
   predictionsBlocked: boolean;
+  phase: string;
+  eliminationRound: string | null;
+  result: {
+    id: string;
+    team1Score: number;
+    team2Score: number;
+    team1PenaltyScore?: number | null;
+    team2PenaltyScore?: number | null;
+    publishedTimestamp?: string;
+  } | null;
 }
 
 interface RawPendingMatch {
@@ -22,14 +32,26 @@ interface RawPendingMatch {
   scheduledTime?: string;
   status?: string;
   predictionsBlocked?: boolean;
+  phase?: string;
+  eliminationRound?: string | null;
+  result?: {
+    id?: string;
+    team1Score?: number;
+    team2Score?: number;
+    team1PenaltyScore?: number | null;
+    team2PenaltyScore?: number | null;
+    publishedTimestamp?: string;
+  } | null;
 }
 
 const statusLabel: Record<string, string> = {
   scheduled: 'Programado',
   in_progress: 'En juego',
-  completed: 'Resultado pendiente',
+  completed: 'Finalizado',
   postponed: 'Postergado',
 };
+
+const missingResultLabel = 'Falta resultado';
 
 const normalizePendingMatch = (raw: RawPendingMatch): PendingMatch | null => {
   const id = raw.id ?? raw.matchId;
@@ -44,14 +66,32 @@ const normalizePendingMatch = (raw: RawPendingMatch): PendingMatch | null => {
     scheduledTime: raw.scheduledTime ?? new Date().toISOString(),
     status: raw.status ?? 'completed',
     predictionsBlocked: raw.predictionsBlocked ?? false,
+    phase: raw.phase ?? 'group',
+    eliminationRound: raw.eliminationRound ?? null,
+    result: raw.result?.id
+      ? {
+          id: raw.result.id,
+          team1Score: raw.result.team1Score ?? 0,
+          team2Score: raw.result.team2Score ?? 0,
+          team1PenaltyScore: raw.result.team1PenaltyScore ?? null,
+          team2PenaltyScore: raw.result.team2PenaltyScore ?? null,
+          publishedTimestamp: raw.result.publishedTimestamp,
+        }
+      : null,
   };
 };
 
 export function AdminResultsPage() {
   const dispatch = useAppDispatch();
-  const [pendingMatches, setPendingMatches] = useState<PendingMatch[]>([]);
+  const [allMatches, setAllMatches] = useState<PendingMatch[]>([]);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState<{ matchId: string; team1Score: number; team2Score: number } | null>(null);
+  const [form, setForm] = useState<{
+    matchId: string;
+    team1Score: number;
+    team2Score: number;
+    team1PenaltyScore: number;
+    team2PenaltyScore: number;
+  } | null>(null);
   const [saving, setSaving] = useState(false);
   const [blockingMatchId, setBlockingMatchId] = useState<string | null>(null);
   const [unblockingMatchId, setUnblockingMatchId] = useState<string | null>(null);
@@ -59,44 +99,102 @@ export function AdminResultsPage() {
   const isTogglingMatch = (matchId: string) =>
     blockingMatchId === matchId || unblockingMatchId === matchId;
 
-  const loadPending = async () => {
+  const loadAllMatches = async () => {
     setLoading(true);
     try {
-      const r = await adminService.getPendingResults();
+      const r = await adminService.getAllMatchesWithResults();
+      // El backend devuelve un array directo
       const payload = Array.isArray(r.data)
         ? r.data
         : Array.isArray((r.data as any)?.matches)
           ? (r.data as any).matches
-          : [];
+          : r.data && typeof r.data === 'object' && Object.values(r.data).every(Array.isArray)
+            ? Object.values(r.data).flat()
+            : [];
 
       const normalized = (payload as RawPendingMatch[])
         .map(normalizePendingMatch)
-        .filter((m): m is PendingMatch => m !== null);
+        .filter((m): m is PendingMatch => m !== null)
+        .sort(
+          (a, b) =>
+            new Date(a.scheduledTime).getTime() -
+            new Date(b.scheduledTime).getTime(),
+        );
 
-      setPendingMatches(normalized);
+      setAllMatches(normalized);
     } catch {
-      setPendingMatches([]);
-      dispatch(addNotification({ type: 'error', message: 'No se pudieron cargar los partidos pendientes' }));
+      setAllMatches([]);
+      dispatch(addNotification({ type: 'error', message: 'No se pudieron cargar los partidos' }));
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { loadPending(); }, []);
+  useEffect(() => { loadAllMatches(); }, []);
 
   const handlePublish = async () => {
     if (!form) return;
     setSaving(true);
     try {
-      await adminService.publishResult(form.matchId, {
+      const selectedMatch = allMatches.find((match) => match.id === form.matchId);
+      const payload = {
         team1Score: form.team1Score,
         team2Score: form.team2Score,
-      });
-      dispatch(addNotification({ type: 'success', message: '✅ Resultado publicado y puntajes actualizados' }));
+        ...(form.team1Score === form.team2Score
+          ? {
+              team1PenaltyScore: form.team1PenaltyScore,
+              team2PenaltyScore: form.team2PenaltyScore,
+            }
+          : {}),
+      };
+
+      const tryPublish = async () => adminService.publishResult(form.matchId, payload);
+      const tryUpdate = async () => adminService.updateResult(form.matchId, payload);
+
+      try {
+        if (selectedMatch?.result) {
+          await tryUpdate();
+        } else {
+          await tryPublish();
+        }
+      } catch (error: any) {
+        const rawMessage = error?.response?.data?.message;
+        const normalizedMessage = Array.isArray(rawMessage)
+          ? rawMessage.join(' ')
+          : String(rawMessage ?? '').toLowerCase();
+
+        const shouldFallbackToUpdate =
+          normalizedMessage.includes('already published') ||
+          normalizedMessage.includes('already exists') ||
+          normalizedMessage.includes('duplicate');
+
+        const shouldFallbackToPublish =
+          normalizedMessage.includes('no result found') ||
+          normalizedMessage.includes('not found');
+
+        if (!selectedMatch?.result && shouldFallbackToUpdate) {
+          await tryUpdate();
+        } else if (selectedMatch?.result && shouldFallbackToPublish) {
+          await tryPublish();
+        } else {
+          throw error;
+        }
+      }
+
+      dispatch(addNotification({
+        type: 'success',
+        message: selectedMatch?.result
+          ? '✅ Resultado actualizado y puntajes recalculados'
+          : '✅ Resultado publicado y puntajes actualizados',
+      }));
       setForm(null);
-      loadPending();
-    } catch {
-      dispatch(addNotification({ type: 'error', message: 'Error al publicar resultado' }));
+      loadAllMatches();
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.message ||
+        error?.message ||
+        'Error al publicar resultado';
+      dispatch(addNotification({ type: 'error', message }));
     } finally {
       setSaving(false);
     }
@@ -112,7 +210,7 @@ export function AdminResultsPage() {
           message: response.data.message || 'Predicciones bloqueadas',
         }),
       );
-      await loadPending();
+      await loadAllMatches();
     } catch {
       dispatch(addNotification({ type: 'error', message: 'Error al bloquear predicciones' }));
     } finally {
@@ -130,7 +228,7 @@ export function AdminResultsPage() {
           message: response.data.message || 'Predicciones desbloqueadas',
         }),
       );
-      await loadPending();
+      await loadAllMatches();
     } catch {
       dispatch(addNotification({ type: 'error', message: 'Error al desbloquear predicciones' }));
     } finally {
@@ -140,37 +238,52 @@ export function AdminResultsPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900">Partidos pendientes de resultado</h2>
+      <h2 className="text-lg font-semibold text-gray-900">Gestión de resultados (publicar / editar)</h2>
 
       {loading ? (
         <p className="text-gray-400">Cargando...</p>
-      ) : pendingMatches.length === 0 ? (
+      ) : allMatches.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-gray-400">
-          No hay partidos pendientes de resultado
+          No hay partidos para mostrar
         </div>
       ) : (
         <div className="space-y-3">
-          {pendingMatches.map((match) => (
+          {allMatches.map((match) => (
             <div key={match.id} className="rounded-xl border border-gray-200 bg-white shadow-sm p-4">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
                   <p className="font-semibold text-gray-900">
                     {match.team1Name} vs {match.team2Name}
                   </p>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <p className="text-xs text-gray-400">{formatMatchTime(match.scheduledTime)}</p>
                     <span className="rounded-full bg-gray-100 text-gray-600 px-2 py-0.5 text-[11px] font-medium">
                       {statusLabel[match.status] ?? match.status}
                     </span>
+                    {match.result ? (
+                      <span className="rounded-full bg-green-50 text-green-700 px-2 py-0.5 text-[11px] font-medium border border-green-200">
+                        Resultado: {match.result.team1Score} - {match.result.team2Score}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-yellow-50 text-yellow-700 px-2 py-0.5 text-[11px] font-medium border border-yellow-200">
+                        {missingResultLabel}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <Button
                   size="sm"
                   onClick={() =>
-                    setForm({ matchId: match.id, team1Score: 0, team2Score: 0 })
+                    setForm({
+                      matchId: match.id,
+                      team1Score: match.result?.team1Score ?? 0,
+                      team2Score: match.result?.team2Score ?? 0,
+                      team1PenaltyScore: match.result?.team1PenaltyScore ?? 0,
+                      team2PenaltyScore: match.result?.team2PenaltyScore ?? 0,
+                    })
                   }
                 >
-                  Ingresar resultado
+                  {match.result ? 'Editar resultado' : 'Ingresar resultado'}
                 </Button>
                 <Button
                   size="sm"
@@ -220,12 +333,49 @@ export function AdminResultsPage() {
                       />
                     </div>
                   </div>
+
+                  {match.phase === 'elimination' && form.team1Score === form.team2Score && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-xs font-semibold text-amber-800 mb-2">
+                        Definicion por penales (obligatoria en empate de eliminacion)
+                      </p>
+                      <div className="flex items-center justify-center gap-6">
+                        <div className="flex flex-col items-center gap-1">
+                          <p className="text-xs font-medium text-gray-600">{match.team1Name}</p>
+                          <input
+                            type="number"
+                            min={0}
+                            max={20}
+                            value={form.team1PenaltyScore}
+                            onChange={(e) =>
+                              setForm({ ...form, team1PenaltyScore: Number(e.target.value) })
+                            }
+                            className="w-16 text-center text-xl font-bold rounded-lg border-2 border-gray-200 focus:border-amber-500 focus:outline-none py-2"
+                          />
+                        </div>
+                        <span className="text-xl font-bold text-gray-300">-</span>
+                        <div className="flex flex-col items-center gap-1">
+                          <p className="text-xs font-medium text-gray-600">{match.team2Name}</p>
+                          <input
+                            type="number"
+                            min={0}
+                            max={20}
+                            value={form.team2PenaltyScore}
+                            onChange={(e) =>
+                              setForm({ ...form, team2PenaltyScore: Number(e.target.value) })
+                            }
+                            className="w-16 text-center text-xl font-bold rounded-lg border-2 border-gray-200 focus:border-amber-500 focus:outline-none py-2"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex gap-3 justify-end">
                     <Button variant="secondary" size="sm" onClick={() => setForm(null)}>
                       Cancelar
                     </Button>
                     <Button size="sm" loading={saving} onClick={handlePublish}>
-                      Publicar resultado
+                      {match.result ? 'Guardar cambios' : 'Publicar resultado'}
                     </Button>
                   </div>
                 </div>

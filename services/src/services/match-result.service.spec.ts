@@ -6,6 +6,7 @@ import { TeamRepository } from '../repositories/team.repository';
 import { DataSource } from 'typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { MatchStatus } from '../entities/match.entity';
+import { MatchPhase } from '../entities/match.entity';
 
 describe('MatchResultService', () => {
   let service: MatchResultService;
@@ -34,6 +35,8 @@ describe('MatchResultService', () => {
             findOne: jest.fn(),
             updateStatus: jest.fn(),
             findCompletedWithoutResult: jest.fn(),
+            findWithoutResult: jest.fn(),
+            find: jest.fn(),
           },
         },
         {
@@ -63,6 +66,7 @@ describe('MatchResultService', () => {
         team1Id: 'team1',
         team2Id: 'team2',
         status: MatchStatus.SCHEDULED,
+        phase: MatchPhase.GROUP,
       };
 
       jest.spyOn(matchRepository, 'findOne').mockResolvedValue(match as any);
@@ -107,6 +111,7 @@ describe('MatchResultService', () => {
         team1Id: 'team1',
         team2Id: 'team2',
         status: MatchStatus.SCHEDULED,
+        phase: MatchPhase.GROUP,
       };
 
       jest.spyOn(matchRepository, 'findOne').mockResolvedValue(match as any);
@@ -235,6 +240,67 @@ describe('MatchResultService', () => {
         beforePublish.getTime(),
       );
     });
+
+    it('should require penalties for drawn elimination match', async () => {
+      const matchId = 'match-123';
+      const match = {
+        id: matchId,
+        team1Id: 'team1',
+        team2Id: 'team2',
+        phase: MatchPhase.ELIMINATION,
+      };
+
+      jest.spyOn(matchRepository, 'findOne').mockResolvedValue(match as any);
+      jest.spyOn(matchResultRepository, 'findByMatchId').mockResolvedValue(null);
+
+      await expect(service.publishResult(matchId, 1, 1)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should publish elimination draw with penalty winner', async () => {
+      const matchId = 'match-123';
+      const match = {
+        id: matchId,
+        team1Id: 'team1',
+        team2Id: 'team2',
+        phase: MatchPhase.ELIMINATION,
+      };
+
+      jest.spyOn(matchRepository, 'findOne').mockResolvedValue(match as any);
+      jest.spyOn(matchResultRepository, 'findByMatchId').mockResolvedValue(null);
+      jest.spyOn(matchResultRepository, 'create').mockReturnValue({
+        id: 'result-123',
+        matchId,
+        team1Score: 1,
+        team2Score: 1,
+        team1PenaltyScore: 5,
+        team2PenaltyScore: 4,
+        winnerId: 'team1',
+        isDraw: true,
+        decidedByPenalties: true,
+        publishedTimestamp: new Date(),
+      } as any);
+      jest.spyOn(matchResultRepository, 'save').mockResolvedValue({
+        id: 'result-123',
+        matchId,
+        team1Score: 1,
+        team2Score: 1,
+        team1PenaltyScore: 5,
+        team2PenaltyScore: 4,
+        winnerId: 'team1',
+        isDraw: true,
+        decidedByPenalties: true,
+        publishedTimestamp: new Date(),
+      } as any);
+
+      const result = await service.publishResult(matchId, 1, 1, 5, 4);
+
+      expect(result.winnerId).toBe('team1');
+      expect(result.decidedByPenalties).toBe(true);
+      expect(result.team1PenaltyScore).toBe(5);
+      expect(result.team2PenaltyScore).toBe(4);
+    });
   });
 
   describe('updateResult', () => {
@@ -298,8 +364,8 @@ describe('MatchResultService', () => {
   });
 
   describe('getPendingResults', () => {
-    it('should return completed matches without results', async () => {
-      const completedMatches = [
+    it('should return matches for admin result management', async () => {
+      const matches = [
         {
           id: 'match-1',
           team1: { id: 'team1', name: 'Team 1' },
@@ -309,12 +375,18 @@ describe('MatchResultService', () => {
           phase: 'group',
           groupStageGroup: 'A',
           eliminationRound: null,
+          result: {
+            id: 'result-1',
+            team1Score: 2,
+            team2Score: 1,
+            team1PenaltyScore: null,
+            team2PenaltyScore: null,
+            publishedTimestamp: new Date(),
+          },
         },
       ];
 
-      jest
-        .spyOn(matchRepository, 'findCompletedWithoutResult')
-        .mockResolvedValue(completedMatches as any);
+      jest.spyOn(matchRepository, 'find').mockResolvedValue(matches as any);
 
       const pending = await service.getPendingResults();
 
@@ -322,12 +394,11 @@ describe('MatchResultService', () => {
       expect(pending[0].matchId).toBe('match-1');
       expect(pending[0].team1).toBeDefined();
       expect(pending[0].team2).toBeDefined();
+      expect(pending[0].result).toBeDefined();
     });
 
-    it('should return empty array if no pending results', async () => {
-      jest
-        .spyOn(matchRepository, 'findCompletedWithoutResult')
-        .mockResolvedValue([]);
+    it('should return empty array when there are no matches', async () => {
+      jest.spyOn(matchRepository, 'find').mockResolvedValue([]);
 
       const pending = await service.getPendingResults();
 

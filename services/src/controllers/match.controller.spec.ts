@@ -34,6 +34,7 @@ describe('MatchController', () => {
     eliminationRound: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+    predictionsBlocked: false,
     predictions: [],
     result: null,
   };
@@ -52,6 +53,7 @@ describe('MatchController', () => {
     eliminationRound: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+    predictionsBlocked: false,
     predictions: [],
     result: null,
   };
@@ -70,6 +72,7 @@ describe('MatchController', () => {
     eliminationRound: 'R16',
     createdAt: new Date(),
     updatedAt: new Date(),
+    predictionsBlocked: false,
     predictions: [],
     result: null,
   };
@@ -339,8 +342,8 @@ describe('MatchController', () => {
       const result = await controller.getMatch('match1');
 
       expect(result.id).toBe(mockMatch.id);
-      expect(result.team1Id).toBe(mockMatch.team1Id);
-      expect(result.team2Id).toBe(mockMatch.team2Id);
+      expect(result.team1.id).toBe(mockMatch.team1Id);
+      expect(result.team2.id).toBe(mockMatch.team2Id);
       expect(matchService.getMatchById).toHaveBeenCalledWith('match1');
     });
 
@@ -497,8 +500,8 @@ describe('MatchController', () => {
       );
 
       expect(result[0].id).toBe(mockMatch.id);
-      expect(result[0].team1Id).toBe(mockMatch.team1Id);
-      expect(result[0].team2Id).toBe(mockMatch.team2Id);
+      expect(result[0].team1.id).toBe(mockMatch.team1Id);
+      expect(result[0].team2.id).toBe(mockMatch.team2Id);
       expect(result[0].scheduledTime.utcTime).toEqual(mockMatch.scheduledTime);
     });
   });
